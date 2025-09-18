@@ -1,0 +1,11 @@
+{
+    "id": "obsidianr",
+    "name": "Obsidian:R",
+    "version": "0.0.1",
+    "minAppVersion": "0.15.0",
+    "description": "",
+    "author": "jwintz",
+    "authorUrl": "",
+    "fundingUrl": "",
+    "isDesktopOnly": false
+}

@@ -1,0 +1,263 @@
+/* Obsidian:R Reader Mode Styles */
+
+/* Ensure workspace leaf container has relative positioning for controls */
+.workspace-leaf.has-obsidian-r-controls {
+    position: relative !important;
+    /* Temporary debugging styles */
+    border: 2px solid blue !important;
+}
+
+/* Don't create a full screen overlay - just add the pills */
+.obsidian-r-reader-mode {
+    position: relative; /* Changed from fixed */
+    pointer-events: none;
+    z-index: 100;
+}
+
+/* Only intercept focus for keyboard events, not visual focus */
+.obsidian-r-reader-mode:focus {
+    outline: none;
+}
+
+/* Enable interaction for content but preserve text cursor */
+.obsidian-r-reader-mode .workspace-leaf-content {
+    pointer-events: auto;
+}
+
+.obsidian-r-reader-mode .markdown-preview-view,
+.obsidian-r-reader-mode .cm-editor,
+.obsidian-r-reader-mode .cm-content {
+    cursor: text !important; /* Preserve text cursor */
+    pointer-events: auto;
+}
+
+/* Show controls on hover or click */
+.obsidian-r-reader-mode:hover .obsidian-r-controls,
+.obsidian-r-reader-mode.show-controls .obsidian-r-controls {
+    pointer-events: auto;
+}
+
+/* Top pill - Chapter progress */
+.obsidian-r-top-pill {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 20px;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    z-index: 101;
+    pointer-events: none;
+}
+
+/* Bottom pill - Total progress */
+.obsidian-r-bottom-pill {
+    position: absolute;
+    bottom: 80px; /* Leave space for controls */
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 20px;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    z-index: 101;
+    pointer-events: none;
+}
+
+/* Controls overlay */
+.obsidian-r-controls {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--background-primary);
+    border-top: 1px solid var(--background-modifier-border);
+    z-index: 102;
+    display: none;
+    opacity: 0;
+    transform: translateY(100%);
+    transition: all 0.3s ease;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+    pointer-events: none;
+    
+    /* Temporary debugging styles */
+    border: 2px solid red !important;
+    min-height: 60px !important;
+}
+
+.obsidian-r-controls.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto; /* Enable interactions when visible */
+}
+
+/* Bottom bar */
+.obsidian-r-bottom-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    gap: 24px;
+}
+
+/* Font size controls */
+.obsidian-r-font-size-group {
+    display: flex;
+    gap: 8px;
+}
+
+.obsidian-r-font-size-group button {
+    background: var(--interactive-normal);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--text-normal);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    min-width: 40px;
+    transition: all 0.2s ease;
+}
+
+.obsidian-r-font-size-group button:hover {
+    background: var(--interactive-hover);
+    border-color: var(--background-modifier-border-hover);
+}
+
+.obsidian-r-font-size-group button:active {
+    background: var(--interactive-active);
+}
+
+/* Font family dropdown */
+.obsidian-r-font-select {
+    background: var(--interactive-normal);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--text-normal);
+    font-size: 14px;
+    cursor: pointer;
+    min-width: 120px;
+    transition: all 0.2s ease;
+}
+
+.obsidian-r-font-select:hover {
+    background: var(--interactive-hover);
+    border-color: var(--background-modifier-border-hover);
+}
+
+.obsidian-r-font-select:focus {
+    outline: none;
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px var(--interactive-accent-hover);
+}
+
+/* Pane toggles */
+.obsidian-r-pane-group {
+    display: flex;
+    gap: 16px;
+}
+
+.obsidian-r-pane-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-normal);
+    user-select: none;
+}
+
+.obsidian-r-pane-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.obsidian-r-pane-toggle:hover {
+    color: var(--text-accent);
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .obsidian-r-bottom-bar {
+        flex-direction: column;
+        gap: 16px;
+        padding: 16px;
+    }
+    
+    .obsidian-r-pane-group {
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    
+    .obsidian-r-font-size-group,
+    .obsidian-r-font-select {
+        align-self: center;
+    }
+    
+    /* Convert toggles to buttons on mobile */
+    .obsidian-r-pane-toggle {
+        background: var(--interactive-normal);
+        border: 1px solid var(--background-modifier-border);
+        border-radius: 6px;
+        padding: 8px 12px;
+        min-width: 80px;
+        justify-content: center;
+    }
+    
+    .obsidian-r-pane-toggle input[type="checkbox"] {
+        display: none;
+    }
+    
+    .obsidian-r-pane-toggle[data-checked="true"] {
+        background: var(--interactive-accent);
+        color: white;
+    }
+}
+
+/* Reader content area */
+.obsidian-r-reader-mode .view-content {
+    padding: 60px 20px 80px;
+    max-width: none;
+    font-family: var(--font-text);
+}
+
+/* Typography adjustments for reader mode */
+.obsidian-r-reader-mode h1,
+.obsidian-r-reader-mode h2,
+.obsidian-r-reader-mode h3,
+.obsidian-r-reader-mode h4,
+.obsidian-r-reader-mode h5,
+.obsidian-r-reader-mode h6 {
+    margin-top: 2em;
+    margin-bottom: 1em;
+}
+
+.obsidian-r-reader-mode p {
+    margin-bottom: 1.5em;
+    text-indent: 1.5em;
+}
+
+.obsidian-r-reader-mode p:first-child,
+.obsidian-r-reader-mode h1 + p,
+.obsidian-r-reader-mode h2 + p,
+.obsidian-r-reader-mode h3 + p,
+.obsidian-r-reader-mode h4 + p,
+.obsidian-r-reader-mode h5 + p,
+.obsidian-r-reader-mode h6 + p {
+    text-indent: 0;
+}
+
+/* Smooth transitions */
+.obsidian-r-reader-mode * {
+    transition: font-size 0.3s ease, font-family 0.3s ease, line-height 0.3s ease;
+}
