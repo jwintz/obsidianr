@@ -1,4 +1,4 @@
-import { Plugin, TFile, TFolder, TAbstractFile, PluginSettingTab, App, Setting, Command, Notice, WorkspaceLeaf } from 'obsidian';
+import { Plugin, TFile, TFolder, TAbstractFile, PluginSettingTab, App, Setting, Command, Notice, WorkspaceLeaf, MarkdownView } from 'obsidian';
 
 // Lucide icon names for the plugin
 type LucideIconName =
@@ -42,6 +42,15 @@ interface ReaderModeState {
     totalPages: number;
     chapterPage: number;
     chapterTotalPages: number;
+    // Add rendering-based pagination state
+    renderedPages: Map<string, number>; // file path -> total pages in that file
+    currentScrollPosition: number;
+    pageHeight: number;
+    contentHeight: number;
+    // Add missing properties for global pagination
+    files: string[]; // ordered list of file paths in the book
+    globalPage: number; // current page in the entire book
+    globalTotalPages: number; // total pages in the entire book
 }
 
 const DEFAULT_SETTINGS: ObsidianRSettings = {
@@ -49,9 +58,9 @@ const DEFAULT_SETTINGS: ObsidianRSettings = {
     justified: true,
     horizontalMargins: 10, // 10% margins
     columns: 1,
-    lineSpacing: 1.0,
-    characterSpacing: 0.0,
-    wordSpacing: 1.0,
+    lineSpacing: 1.5, // Improved readability - typical for ebooks
+    characterSpacing: 0.02, // Slight letter spacing for better readability
+    wordSpacing: 0.0, // Normal word spacing (0 = browser default)
     fontSize: 16,
     fontFamily: 'Charter',
     showToc: false,
@@ -258,14 +267,24 @@ export default class ObsidianRPlugin extends Plugin {
         currentPage: 1,
         totalPages: 1,
         chapterPage: 1,
-        chapterTotalPages: 1
+        chapterTotalPages: 1,
+        renderedPages: new Map(),
+        currentScrollPosition: 0,
+        pageHeight: 0,
+        contentHeight: 0,
+        files: [],
+        globalPage: 1,
+        globalTotalPages: 1
     };
     private readerModeEl: HTMLElement | null = null;
     private controlsEl: HTMLElement | null = null;
     private hideControlsTimeout: number | null = null;
     private readerClickHandler: ((event: Event) => void) | null = null;
+    private scrollHandler: ((event: Event) => void) | null = null;
+    private scrollContainer: HTMLElement | null = null;
     private readerKeyboardHandler: ((event: KeyboardEvent) => void) | null = null;
     private zenMode: boolean = false;
+    private originalViewMode: 'source' | 'preview' | null = null;
 
     async onload() {
         console.log('Loading Obsidian:R plugin');
@@ -733,12 +752,18 @@ export default class ObsidianRPlugin extends Plugin {
 
         console.log('Reader mode state set to active');
 
+        // Switch to reading view for better reading experience
+        await this.switchToReadingView();
+
         // Calculate page numbers
         await this.calculatePageNumbers();
 
         // Create reader mode UI
         this.createReaderModeUI();
         this.showReaderControls();
+
+        // Apply visual styling to content area
+        this.applyReaderModeStyles();
 
         // Add reader mode keyboard handlers
         this.addReaderModeKeyboardHandlers();
@@ -748,9 +773,220 @@ export default class ObsidianRPlugin extends Plugin {
     }
 
     /**
+     * Switches the current view to reading mode and stores original mode
+     */
+    private async switchToReadingView() {
+        const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeMarkdownView) return;
+
+        // Store the original view mode
+        this.originalViewMode = activeMarkdownView.getMode() as 'source' | 'preview';
+        console.log('📖 Storing original view mode:', this.originalViewMode);
+
+        // Switch to preview mode if not already
+        if (this.originalViewMode !== 'preview') {
+            console.log('📖 Switching to reading view...');
+            await activeMarkdownView.setState({ mode: 'preview' }, { history: false });
+            console.log('📖 Switched to reading view');
+        }
+    }
+
+    /**
+     * Restores the original view mode when exiting reader mode
+     */
+    private async restoreOriginalViewMode() {
+        if (!this.originalViewMode) return;
+
+        const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeMarkdownView) return;
+
+        console.log('📖 Restoring original view mode:', this.originalViewMode);
+        await activeMarkdownView.setState({ mode: this.originalViewMode }, { history: false });
+        this.originalViewMode = null;
+        console.log('📖 Original view mode restored');
+    }
+
+    /**
+     * Applies reader mode visual styling to the content area
+     */
+    private applyReaderModeStyles() {
+        console.log('🎨 Applying reader mode styles to content area...');
+
+        // Create or update the style element
+        let styleEl = document.getElementById('obsidian-r-reader-styles') as HTMLStyleElement;
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'obsidian-r-reader-styles';
+            document.head.appendChild(styleEl);
+        }
+
+        const horizontalMarginPx = (window.innerWidth * this.settings.horizontalMargins) / 100;
+        const contentWidth = window.innerWidth - (horizontalMarginPx * 2);
+
+        console.log('🎨 Style calculations:', {
+            windowWidth: window.innerWidth,
+            marginPercent: this.settings.horizontalMargins,
+            horizontalMarginPx,
+            contentWidth,
+            fontSize: this.settings.fontSize,
+            fontFamily: this.settings.fontFamily,
+            lineSpacing: this.settings.lineSpacing,
+            characterSpacing: this.settings.characterSpacing,
+            wordSpacing: this.settings.wordSpacing
+        });
+
+        // Apply styles to current view mode and add class for identification
+        const activeLeaf = this.app.workspace.activeLeaf;
+        if (activeLeaf?.view?.containerEl) {
+            activeLeaf.view.containerEl.classList.add('obsidian-r-active');
+            console.log('🎨 Added obsidian-r-active class to active view container');
+        }
+
+        const css = `
+            /* Target the actual content container - the markdown-preview-sizer */
+            .obsidian-r-active .markdown-preview-sizer,
+            .workspace-leaf.has-obsidian-r-controls .markdown-preview-sizer,
+            .workspace-leaf-content.has-obsidian-r-controls .markdown-preview-sizer {
+                max-width: ${contentWidth}px !important;
+                margin: 0 auto !important;
+                padding-left: ${horizontalMarginPx}px !important;
+                padding-right: ${horizontalMarginPx}px !important;
+                box-sizing: border-box !important;
+                font-family: '${this.settings.fontFamily}', serif !important;
+                font-size: ${this.settings.fontSize}px !important;
+                line-height: ${this.settings.lineSpacing} !important;
+                letter-spacing: ${this.settings.characterSpacing}em !important;
+                word-spacing: ${this.settings.wordSpacing === 0 ? 'normal' : this.settings.wordSpacing + 'em'} !important;
+                ${this.settings.justified ? `
+                    text-align: justify !important;
+                    text-justify: inter-word !important;
+                    hyphens: auto !important;
+                    -webkit-hyphens: auto !important;
+                    -moz-hyphens: auto !important;
+                    -ms-hyphens: auto !important;
+                    word-break: normal !important;
+                    overflow-wrap: break-word !important;
+                ` : 'text-align: left !important;'}
+                ${this.settings.columns > 1 ? `
+                    column-count: ${this.settings.columns};
+                    column-gap: 30px;
+                    column-fill: auto;
+                ` : ''}
+            }
+
+            /* Also apply to CM editor for edit mode */
+            .obsidian-r-active .cm-editor,
+            .obsidian-r-active .cm-content,
+            .workspace-leaf.has-obsidian-r-controls .cm-editor,
+            .workspace-leaf.has-obsidian-r-controls .cm-content,
+            .workspace-leaf-content.has-obsidian-r-controls .cm-editor,
+            .workspace-leaf-content.has-obsidian-r-controls .cm-content {
+                max-width: ${contentWidth}px !important;
+                margin: 0 auto !important;
+                padding-left: ${horizontalMarginPx}px !important;
+                padding-right: ${horizontalMarginPx}px !important;
+                box-sizing: border-box !important;
+                font-family: '${this.settings.fontFamily}', serif !important;
+                font-size: ${this.settings.fontSize}px !important;
+                line-height: ${this.settings.lineSpacing} !important;
+                letter-spacing: ${this.settings.characterSpacing}em !important;
+                word-spacing: ${this.settings.wordSpacing === 0 ? 'normal' : this.settings.wordSpacing + 'em'} !important;
+                ${this.settings.justified ? `
+                    text-align: justify !important;
+                    text-justify: inter-word !important;
+                    hyphens: auto !important;
+                    -webkit-hyphens: auto !important;
+                    -moz-hyphens: auto !important;
+                    -ms-hyphens: auto !important;
+                    word-break: normal !important;
+                    overflow-wrap: break-word !important;
+                ` : 'text-align: left !important;'}
+            }
+
+            /* Ensure outer containers don't interfere */
+            .obsidian-r-active .markdown-preview-view,
+            .workspace-leaf.has-obsidian-r-controls .markdown-preview-view,
+            .workspace-leaf-content.has-obsidian-r-controls .markdown-preview-view {
+                width: 100% !important;
+                max-width: none !important;
+            }
+
+            /* Hide frontmatter in reader mode */
+            .obsidian-r-active .metadata-container,
+            .workspace-leaf.has-obsidian-r-controls .metadata-container,
+            .workspace-leaf-content.has-obsidian-r-controls .metadata-container {
+                display: none !important;
+            }
+
+            /* Hide navigation elements in reader mode */
+            .obsidian-r-active .nav-header,
+            .obsidian-r-active .backlink-pane,
+            .obsidian-r-active .mod-footer,
+            .workspace-leaf.has-obsidian-r-controls .nav-header,
+            .workspace-leaf.has-obsidian-r-controls .backlink-pane,
+            .workspace-leaf.has-obsidian-r-controls .mod-footer,
+            .workspace-leaf-content.has-obsidian-r-controls .nav-header,
+            .workspace-leaf-content.has-obsidian-r-controls .backlink-pane,
+            .workspace-leaf-content.has-obsidian-r-controls .mod-footer {
+                display: none !important;
+            }
+
+            /* Improve readability and background */
+            .obsidian-r-active .markdown-preview-view,
+            .obsidian-r-active .markdown-reading-view,
+            .obsidian-r-active .markdown-source-view,
+            .workspace-leaf.has-obsidian-r-controls .markdown-preview-view,
+            .workspace-leaf.has-obsidian-r-controls .markdown-reading-view,
+            .workspace-leaf.has-obsidian-r-controls .markdown-source-view,
+            .workspace-leaf-content.has-obsidian-r-controls .markdown-preview-view,
+            .workspace-leaf-content.has-obsidian-r-controls .markdown-reading-view,
+            .workspace-leaf-content.has-obsidian-r-controls .markdown-source-view {
+                background: var(--background-primary) !important;
+                color: var(--text-normal) !important;
+            }
+
+            /* Paragraph spacing for better readability */
+            .obsidian-r-active p,
+            .workspace-leaf.has-obsidian-r-controls p,
+            .workspace-leaf-content.has-obsidian-r-controls p {
+                margin-bottom: 1.2em !important;
+                text-indent: ${this.settings.justified ? '1.5em' : '0'} !important;
+            }
+        `;
+
+        styleEl.textContent = css;
+        console.log('🎨 Reader mode styles applied:', {
+            fontSize: this.settings.fontSize,
+            fontFamily: this.settings.fontFamily,
+            columns: this.settings.columns,
+            contentWidth: contentWidth,
+            margins: horizontalMarginPx
+        });
+    }
+
+    /**
+     * Removes reader mode visual styling
+     */
+    private removeReaderModeStyles() {
+        console.log('🎨 Removing reader mode styles...');
+        const styleEl = document.getElementById('obsidian-r-reader-styles');
+        if (styleEl) {
+            styleEl.remove();
+            console.log('🎨 Reader mode styles removed');
+        }
+
+        // Remove active class from view container
+        const activeLeaf = this.app.workspace.activeLeaf;
+        if (activeLeaf?.view?.containerEl) {
+            activeLeaf.view.containerEl.classList.remove('obsidian-r-active');
+            console.log('🎨 Removed obsidian-r-active class from view container');
+        }
+    }
+
+    /**
      * Exits reader mode
      */
-    exitReaderMode() {
+    async exitReaderMode() {
         console.log('Exiting reader mode...');
         if (!this.readerModeState.isActive) {
             console.log('Reader mode not active, nothing to exit');
@@ -770,6 +1006,15 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Remove reader mode keyboard handlers
         this.removeReaderModeKeyboardHandlers();
+
+        // Clean up scroll listener
+        this.removeScrollListener();
+
+        // Restore original view mode
+        await this.restoreOriginalViewMode();
+
+        // Remove reader mode styles
+        this.removeReaderModeStyles();
 
         // Clean up UI
         this.destroyReaderModeUI();
@@ -815,16 +1060,21 @@ export default class ObsidianRPlugin extends Plugin {
         document.addEventListener('click', this.readerClickHandler);
         document.addEventListener('touchstart', this.readerClickHandler);
 
+        // Add scroll listener for real-time page updates
+        this.addScrollListener();
+
         // Create top pill (chapter progress) and append to active tab
         const topPill = document.createElement('div');
         topPill.className = 'obsidian-r-top-pill';
         topPill.textContent = `${this.readerModeState.chapterPage}/${this.readerModeState.chapterTotalPages}`;
+        console.log('🏷️ Creating top pill:', topPill.textContent, topPill.className);
         this.appendPillToActiveTab(topPill);
 
-        // Create bottom pill (total progress) and append to active tab
+        // Create bottom pill (global book progress) and append to active tab  
         const bottomPill = document.createElement('div');
         bottomPill.className = 'obsidian-r-bottom-pill';
-        bottomPill.textContent = `${this.readerModeState.currentPage}/${this.readerModeState.totalPages}`;
+        bottomPill.textContent = `${this.readerModeState.globalPage}/${this.readerModeState.globalTotalPages}`;
+        console.log('🏷️ Creating bottom pill:', bottomPill.textContent, bottomPill.className);
         this.appendPillToActiveTab(bottomPill);
 
         // Store pills for later cleanup
@@ -1041,52 +1291,34 @@ export default class ObsidianRPlugin extends Plugin {
      * Appends a pill to the active tab's viewport
      */
     private appendPillToActiveTab(pill: HTMLElement) {
-        // Try different approaches to find the right container
-        let targetContainer: HTMLElement | null = null;
+        // Find the active tab's content container
+        const activeTab = document.querySelector('.workspace-leaf.mod-active .workspace-leaf-content') ||
+            document.querySelector('.workspace-leaf-content.obsidian-r-active');
 
-        // Approach 1: Try finding the markdown content area specifically
-        const markdownContent = document.querySelector('.workspace-leaf.mod-active .markdown-source-view, .workspace-leaf.mod-active .markdown-reading-view') as HTMLElement;
-        if (markdownContent) {
-            targetContainer = markdownContent;
-            console.log('Using markdown content area for pill:', targetContainer);
-        }
+        if (activeTab) {
+            console.log('🏷️ Found active tab container, appending pill:', pill.className);
+            console.log('🏷️ Pill content:', pill.textContent);
 
-        // Approach 2: Try finding the workspace leaf content container
-        if (!targetContainer) {
-            const leafContent = document.querySelector('.workspace-leaf.mod-active .workspace-leaf-content[data-type="markdown"]') as HTMLElement;
-            if (leafContent) {
-                targetContainer = leafContent;
-                console.log('Using markdown leaf content for pill:', targetContainer);
-            }
-        }
-
-        // Approach 3: Try finding any workspace leaf content
-        if (!targetContainer) {
-            const leafContent = document.querySelector('.workspace-leaf.mod-active .workspace-leaf-content') as HTMLElement;
-            if (leafContent) {
-                targetContainer = leafContent;
-                console.log('Using leaf content for pill:', targetContainer);
-            }
-        }
-
-        // Approach 4: Try the workspace leaf view container
-        if (!targetContainer) {
-            const workspaceLeaf = this.app.workspace.activeLeaf;
-            if (workspaceLeaf?.view?.containerEl) {
-                targetContainer = workspaceLeaf.view.containerEl;
-                console.log('Using view containerEl for pill:', targetContainer);
-            }
-        }
-
-        if (targetContainer) {
-            console.log('Appending pill to target container:', pill.className);
-            // Add class to ensure relative positioning
-            targetContainer.classList.add('has-obsidian-r-controls');
-            targetContainer.appendChild(pill);
+            // Append pill to the active tab's content area
+            activeTab.appendChild(pill);
+            console.log('🏷️ Pill appended to active tab. Pill in DOM:', activeTab.contains(pill));
         } else {
-            console.log('No suitable container found for pill, falling back to document body');
+            console.warn('🏷️ No active tab found, falling back to body append');
             document.body.appendChild(pill);
         }
+
+        // Log pill styles to verify they're applied
+        const computedStyle = window.getComputedStyle(pill);
+        console.log('🏷️ Pill computed styles:');
+        console.log('  position:', computedStyle.position);
+        console.log('  display:', computedStyle.display);
+        console.log('  visibility:', computedStyle.visibility);
+        console.log('  opacity:', computedStyle.opacity);
+        console.log('  z-index:', computedStyle.zIndex);
+        console.log('  top:', computedStyle.top);
+        console.log('  bottom:', computedStyle.bottom);
+        console.log('  left:', computedStyle.left);
+        console.log('  transform:', computedStyle.transform);
     }
 
     /**
@@ -1226,20 +1458,23 @@ export default class ObsidianRPlugin extends Plugin {
      * Adjusts font size
      */
     private adjustFontSize(delta: number) {
-        console.log('Adjusting font size by:', delta, 'current size:', this.settings.fontSize);
+        console.log('🔧 Adjusting font size by:', delta, 'current size:', this.settings.fontSize);
         this.settings.fontSize = Math.max(10, Math.min(32, this.settings.fontSize + delta));
-        console.log('New font size:', this.settings.fontSize);
+        console.log('🔧 New font size:', this.settings.fontSize);
         this.saveSettings();
-        this.applyReaderStyles();
+        // Use the comprehensive style application method
+        this.applyReaderModeStyles();
     }
 
     /**
      * Changes font family
      */
     private changeFontFamily(fontFamily: string) {
+        console.log('🔧 Changing font family to:', fontFamily);
         this.settings.fontFamily = fontFamily;
         this.saveSettings();
-        this.applyReaderStyles();
+        // Use the comprehensive style application method
+        this.applyReaderModeStyles();
     }
 
     /**
@@ -1439,17 +1674,17 @@ export default class ObsidianRPlugin extends Plugin {
      * Sets up keyboard event handlers for reader mode
      */
     private addReaderModeKeyboardHandlers() {
-        console.log('Setting up reader mode keyboard handlers...');
+        // console.log('Setting up reader mode keyboard handlers...');
 
         const testHandler = (e: KeyboardEvent) => {
             if (!this.readerModeState.isActive) return;
 
-            console.log('Reader mode key pressed:', e.key, 'Code:', e.code, 'Modifiers:', {
-                ctrl: e.ctrlKey,
-                meta: e.metaKey,
-                alt: e.altKey,
-                shift: e.shiftKey
-            });
+            // console.log('Reader mode key pressed:', e.key, 'Code:', e.code, 'Modifiers:', {
+            //     ctrl: e.ctrlKey,
+            //     meta: e.metaKey,
+            //     alt: e.altKey,
+            //     shift: e.shiftKey
+            // });
 
             // Test for font size keys (without modifiers)
             if (e.key === '+' || e.key === '=') {
@@ -1484,7 +1719,7 @@ export default class ObsidianRPlugin extends Plugin {
         if (this.readerKeyboardHandler) {
             document.removeEventListener('keydown', this.readerKeyboardHandler, { capture: true });
             this.readerKeyboardHandler = null;
-            console.log('Removed reader mode keyboard handlers');
+            // console.log('Removed reader mode keyboard handlers');
         }
     }
 
@@ -1529,31 +1764,341 @@ export default class ObsidianRPlugin extends Plugin {
     }
 
     /**
-     * Calculates page numbers for the current book and chapter
+     * Calculates page numbers based on actual rendering and layout
      */
     private async calculatePageNumbers() {
+        console.log('🔢 calculatePageNumbers() called');
         if (!this.readerModeState.currentBook || !this.readerModeState.currentChapter) {
+            console.log('❌ Missing book or chapter, returning early');
             return;
         }
 
         const book = this.readerModeState.currentBook;
         const currentChapter = this.readerModeState.currentChapter;
 
-        // Calculate total pages (number of chapters + main file)
-        this.readerModeState.totalPages = book.chapters.length + (book.mainFile ? 1 : 0);
+        console.log('📚 Processing book:', book.folder.name, 'Chapter:', currentChapter.name);
 
-        // Find current page number
-        if (currentChapter === book.mainFile) {
-            this.readerModeState.currentPage = 1;
-            this.readerModeState.chapterPage = 1;
-            this.readerModeState.chapterTotalPages = 1;
-        } else {
-            const chapterIndex = book.chapters.indexOf(currentChapter);
-            if (chapterIndex >= 0) {
-                this.readerModeState.currentPage = chapterIndex + (book.mainFile ? 2 : 1);
-                this.readerModeState.chapterPage = 1; // Always 1 for single file chapters
-                this.readerModeState.chapterTotalPages = 1; // Always 1 for single file chapters
+        // Build ordered list of files in the book
+        this.readerModeState.files = [];
+        if (book.mainFile) {
+            this.readerModeState.files.push(book.mainFile.path);
+        }
+        for (const chapter of book.chapters) {
+            this.readerModeState.files.push(chapter.path);
+        }
+        console.log('📄 Files in book:', this.readerModeState.files);
+
+        // Calculate rendering metrics for current chapter
+        console.log('🔍 Calculating rendering metrics...');
+        await this.calculateRenderingMetrics(currentChapter);
+
+        // Calculate total pages for the entire book
+        let totalBookPages = 0;
+        let currentChapterGlobalStartPage = 1;
+
+        console.log('📏 Calculating pages for entire book...');
+
+        // Process main file first (if exists)
+        if (book.mainFile) {
+            const mainFilePages = await this.getOrCalculateFilePages(book.mainFile);
+            totalBookPages += mainFilePages;
+
+            if (currentChapter === book.mainFile) {
+                currentChapterGlobalStartPage = 1;
             }
+        }
+
+        // Process all chapters
+        for (const chapter of book.chapters) {
+            const chapterPages = await this.getOrCalculateFilePages(chapter);
+
+            if (currentChapter === chapter) {
+                currentChapterGlobalStartPage = totalBookPages + 1;
+            }
+
+            totalBookPages += chapterPages;
+        }
+
+        // Update state with rendering-based calculations
+        this.readerModeState.totalPages = totalBookPages;
+        this.readerModeState.globalTotalPages = totalBookPages;
+        this.readerModeState.chapterTotalPages = this.readerModeState.renderedPages.get(currentChapter.path) || 1;
+
+        // Calculate current page within chapter based on scroll position
+        this.updateCurrentPageFromScroll();
+
+        // Calculate global page number
+        this.readerModeState.globalPage = currentChapterGlobalStartPage + this.readerModeState.chapterPage - 1;
+
+        console.log('📊 Rendering-based pagination calculated:');
+        console.log('  Current chapter pages:', this.readerModeState.chapterTotalPages);
+        console.log('  Current page in chapter:', this.readerModeState.chapterPage);
+        console.log('  Global page:', this.readerModeState.globalPage);
+        console.log('  Total book pages:', this.readerModeState.globalTotalPages);
+    }
+
+    /**
+     * Adds scroll listener to update page numbers in real-time
+     */
+    private addScrollListener() {
+        const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeMarkdownView?.containerEl) return;
+
+        const scrollContainer = activeMarkdownView.containerEl.querySelector('.markdown-source-view, .markdown-preview-view, .markdown-reading-view');
+        if (!scrollContainer) return;
+
+        console.log('📜 Adding scroll listener to:', scrollContainer.className);
+
+        // Throttle scroll events for performance
+        let scrollTimeout: NodeJS.Timeout;
+        const scrollHandler = () => {
+            clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(() => {
+                this.updateCurrentPageFromScroll();
+            }, 100); // Update every 100ms when scrolling stops
+        };
+
+        scrollContainer.addEventListener('scroll', scrollHandler);
+
+        // Store reference for cleanup
+        this.scrollHandler = scrollHandler;
+        this.scrollContainer = scrollContainer as HTMLElement;
+    }
+
+    /**
+     * Updates current page based on scroll position
+     */
+    private updateCurrentPageFromScroll() {
+        if (!this.readerModeState.renderedPages || !this.readerModeState.pageHeight) return;
+
+        const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeMarkdownView?.file) return;
+
+        const scrollContainer = activeMarkdownView.containerEl.querySelector('.markdown-source-view, .markdown-preview-view, .markdown-reading-view') as HTMLElement;
+        if (!scrollContainer) return;
+
+        const scrollTop = scrollContainer.scrollTop;
+        const currentPage = Math.floor(scrollTop / this.readerModeState.pageHeight) + 1;
+
+        console.log('📜 Scroll update:', {
+            scrollTop,
+            pageHeight: this.readerModeState.pageHeight,
+            currentPage,
+            totalPages: this.readerModeState.chapterTotalPages
+        });
+
+        // Update chapter page
+        this.readerModeState.chapterPage = Math.min(currentPage, this.readerModeState.chapterTotalPages);
+        this.readerModeState.currentScrollPosition = scrollTop;
+
+        // Calculate global page (book-wide)
+        if (this.readerModeState.renderedPages.has(activeMarkdownView.file.path)) {
+            let globalPage = 0;
+            const currentFilePages = this.readerModeState.renderedPages.get(activeMarkdownView.file.path) || 0;
+
+            // Add pages from previous files
+            for (const filePath of this.readerModeState.files) {
+                if (filePath === activeMarkdownView.file.path) {
+                    globalPage += currentPage;
+                    break;
+                }
+                globalPage += this.readerModeState.renderedPages.get(filePath) || 0;
+            }
+
+            this.readerModeState.globalPage = globalPage;
+        }
+
+        // Update pill displays
+        this.updatePillDisplays();
+    }
+
+    /**
+     * Updates pill displays with current page information
+     */
+    private updatePillDisplays() {
+        // Update top pill (chapter progress)
+        const topPill = document.querySelector('.obsidian-r-top-pill') as HTMLElement;
+        if (topPill) {
+            topPill.textContent = `${this.readerModeState.chapterPage}/${this.readerModeState.chapterTotalPages}`;
+        }
+
+        // Update bottom pill (book progress)
+        const bottomPill = document.querySelector('.obsidian-r-bottom-pill') as HTMLElement;
+        if (bottomPill) {
+            bottomPill.textContent = `${this.readerModeState.globalPage}/${this.readerModeState.globalTotalPages}`;
+        }
+    }
+
+    /**
+     * Removes scroll listener
+     */
+    private removeScrollListener() {
+        if (this.scrollHandler && this.scrollContainer) {
+            this.scrollContainer.removeEventListener('scroll', this.scrollHandler);
+            this.scrollHandler = null;
+            this.scrollContainer = null;
+        }
+    }
+
+    /**
+     * Gets cached page count or calculates it for a file
+     */
+    private async getOrCalculateFilePages(file: TFile): Promise<number> {
+        const cached = this.readerModeState.renderedPages.get(file.path);
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const pages = await this.calculateFilePages(file);
+        this.readerModeState.renderedPages.set(file.path, pages);
+        return pages;
+    }
+
+    /**
+     * Calculates the number of pages for a specific file based on rendering
+     */
+    private async calculateFilePages(file: TFile): Promise<number> {
+        console.log('📊 calculateFilePages() called for:', file.name);
+        try {
+            const content = await this.app.vault.read(file);
+            console.log('📖 Read file content, length:', content.length);
+
+            const processedContent = this.processContentForRendering(content);
+            console.log('✨ Processed content, length:', processedContent.length);
+
+            // Create a temporary element to measure content height
+            const tempEl = document.createElement('div');
+            tempEl.style.cssText = this.getReaderModeStyles();
+            tempEl.style.position = 'absolute';
+            tempEl.style.top = '-9999px';
+            tempEl.style.left = '-9999px';
+            tempEl.style.visibility = 'hidden';
+
+            // Set content and measure
+            const htmlContent = this.renderMarkdownToHTML(processedContent);
+            tempEl.innerHTML = htmlContent;
+            document.body.appendChild(tempEl);
+
+            const contentHeight = tempEl.scrollHeight;
+            const pageHeight = this.calculatePageHeight();
+            const pages = Math.max(1, Math.ceil(contentHeight / pageHeight));
+
+            document.body.removeChild(tempEl);
+
+            console.log(`📄 File "${file.basename}": ${contentHeight}px content / ${pageHeight}px per page = ${pages} pages`);
+            return pages;
+        } catch (error) {
+            console.error('❌ Error calculating file pages:', error);
+            return 1;
+        }
+    }
+
+    /**
+     * Processes content for rendering (removes frontmatter, applies formatting)
+     */
+    private processContentForRendering(content: string): string {
+        console.log('🔧 Processing content for rendering. Original length:', content.length);
+
+        // Remove frontmatter in reader mode
+        let processedContent = content.replace(/^---\n[\s\S]*?\n---\n/, '');
+
+        const frontmatterRemoved = content.length !== processedContent.length;
+        console.log('📝 Frontmatter removed:', frontmatterRemoved, 'New length:', processedContent.length);
+
+        // Remove any leading/trailing whitespace
+        processedContent = processedContent.trim();
+
+        return processedContent;
+    }
+
+    /**
+     * Converts markdown to HTML for measurement
+     */
+    private renderMarkdownToHTML(markdown: string): string {
+        // Simple markdown to HTML conversion for measurement
+        // In a real implementation, you'd use Obsidian's markdown processor
+        return markdown
+            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/\n\n/g, '</p><p>')
+            .replace(/^(.+)$/gm, '<p>$1</p>')
+            .replace(/<p><\/p>/g, '');
+    }
+
+    /**
+     * Generates CSS styles for content measurement
+     */
+    private getReaderModeStyles(): string {
+        const horizontalMarginPx = (window.innerWidth * this.settings.horizontalMargins) / 100;
+        const contentWidth = window.innerWidth - (horizontalMarginPx * 2);
+        const columnWidth = this.settings.columns > 1 ?
+            (contentWidth - (this.settings.columns - 1) * 20) / this.settings.columns :
+            contentWidth;
+
+        const styles = `
+            font-family: ${this.settings.fontFamily};
+            font-size: ${this.settings.fontSize}px;
+            line-height: ${this.settings.lineSpacing};
+            letter-spacing: ${this.settings.characterSpacing}em;
+            word-spacing: ${this.settings.wordSpacing}em;
+            text-align: ${this.settings.justified ? 'justify' : 'left'};
+            width: ${columnWidth}px;
+            column-count: ${this.settings.columns};
+            column-gap: 20px;
+            margin: 0 ${horizontalMarginPx}px;
+            padding: 20px;
+            box-sizing: border-box;
+        `;
+
+        console.log('🎨 Generated reader mode styles:', {
+            fontSize: this.settings.fontSize,
+            fontFamily: this.settings.fontFamily,
+            columns: this.settings.columns,
+            margins: this.settings.horizontalMargins,
+            width: columnWidth
+        });
+
+        return styles;
+    }
+
+    /**
+     * Calculates the height of one page based on current settings
+     */
+    private calculatePageHeight(): number {
+        // Use viewport height minus margins for page height
+        const verticalMargin = 40; // Top and bottom margins
+        return window.innerHeight - verticalMargin;
+    }
+
+    /**
+     * Calculates current rendering metrics for the active content
+     */
+    private async calculateRenderingMetrics(file: TFile) {
+        console.log('📐 calculateRenderingMetrics() called for file:', file.name);
+
+        // Use the comprehensive rendering calculation instead of simple metrics
+        const pages = await this.calculateFilePages(file);
+        console.log('📄 Calculated pages for', file.name, ':', pages);
+
+        // Cache the result
+        this.readerModeState.renderedPages.set(file.path, pages);
+
+        // Update current chapter pages
+        this.readerModeState.chapterTotalPages = pages;
+
+        // Calculate page height based on viewport
+        this.readerModeState.pageHeight = this.calculatePageHeight();
+        console.log('📏 Page height:', this.readerModeState.pageHeight);
+
+        // Get current scroll position
+        const contentEl = document.querySelector('.workspace-leaf.mod-active .markdown-source-view, .workspace-leaf.mod-active .markdown-reading-view, .workspace-leaf.mod-active .markdown-preview-view') as HTMLElement;
+        if (contentEl) {
+            this.readerModeState.contentHeight = contentEl.scrollHeight;
+            this.readerModeState.currentScrollPosition = contentEl.scrollTop;
+            console.log('📏 Content height:', this.readerModeState.contentHeight, 'Scroll pos:', this.readerModeState.currentScrollPosition);
         }
     }
 
@@ -1564,12 +2109,27 @@ export default class ObsidianRPlugin extends Plugin {
         const topPill = document.querySelector('.obsidian-r-top-pill') as HTMLElement;
         const bottomPill = document.querySelector('.obsidian-r-bottom-pill') as HTMLElement;
 
+        console.log('🔄 Updating pills:', {
+            topPill: !!topPill,
+            bottomPill: !!bottomPill,
+            chapterPage: this.readerModeState.chapterPage,
+            chapterTotal: this.readerModeState.chapterTotalPages,
+            globalPage: this.readerModeState.globalPage,
+            globalTotal: this.readerModeState.globalTotalPages
+        });
+
         if (topPill) {
             topPill.textContent = `${this.readerModeState.chapterPage}/${this.readerModeState.chapterTotalPages}`;
+            console.log('🏷️ Updated top pill:', topPill.textContent);
+        } else {
+            console.log('❌ Top pill not found in DOM');
         }
 
         if (bottomPill) {
-            bottomPill.textContent = `${this.readerModeState.currentPage}/${this.readerModeState.totalPages}`;
+            bottomPill.textContent = `${this.readerModeState.globalPage}/${this.readerModeState.globalTotalPages}`;
+            console.log('🏷️ Updated bottom pill:', bottomPill.textContent);
+        } else {
+            console.log('❌ Bottom pill not found in DOM');
         }
     }
 
@@ -1601,12 +2161,50 @@ export default class ObsidianRPlugin extends Plugin {
      * Loads plugin settings
      */
     async loadSettings() {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        const loadedData = await this.loadData();
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
+
+        // Migration: Update typography defaults if they're still at old values
+        let settingsUpdated = false;
+        if (this.settings.lineSpacing === 1.0) {
+            this.settings.lineSpacing = 1.5;
+            settingsUpdated = true;
+            console.log('📖 Migrated lineSpacing to new default: 1.5');
+        }
+        if (this.settings.characterSpacing === 0.0) {
+            this.settings.characterSpacing = 0.02;
+            settingsUpdated = true;
+            console.log('📖 Migrated characterSpacing to new default: 0.02');
+        }
+
+        // Save migrated settings
+        if (settingsUpdated) {
+            await this.saveSettings();
+            console.log('📖 Settings migrated and saved');
+        }
     }    /**
      * Saves plugin settings
      */
     async saveSettings() {
         await this.saveData(this.settings);
+    }
+
+    /**
+     * Refreshes reader mode rendering when settings change
+     */
+    public refreshReaderModeIfActive() {
+        console.log('🔄 refreshReaderModeIfActive called - isActive:', this.readerModeState.isActive);
+        if (this.readerModeState.isActive) {
+            console.log('🔄 Settings changed while in reader mode, refreshing styles...');
+            this.applyReaderModeStyles();
+
+            // Also recalculate pagination if it affects layout
+            this.calculatePageNumbers();
+            this.updatePills();
+            console.log('🔄 Reader mode refresh completed');
+        } else {
+            console.log('🔄 Reader mode not active, skipping refresh');
+        }
     }
 
     /**
@@ -1646,8 +2244,10 @@ class ObsidianRSettingTab extends PluginSettingTab {
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.justified)
                 .onChange(async (value) => {
+                    console.log('🔧 Justified setting changed to:', value);
                     this.plugin.settings.justified = value;
                     await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
                 }));
 
         new Setting(containerEl)
@@ -1660,6 +2260,7 @@ class ObsidianRSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.horizontalMargins = value;
                     await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
                 }));
 
         new Setting(containerEl)
@@ -1672,6 +2273,7 @@ class ObsidianRSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.columns = value;
                     await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
                 }));
 
         new Setting(containerEl)
@@ -1684,6 +2286,7 @@ class ObsidianRSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.lineSpacing = Math.round(value * 10) / 10;
                     await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
                 }));
 
         new Setting(containerEl)
@@ -1696,18 +2299,34 @@ class ObsidianRSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.characterSpacing = Math.round(value * 100) / 100;
                     await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
                 }));
 
         new Setting(containerEl)
             .setName('Word Spacing')
-            .setDesc('Adjust spacing between words (1.0 = normal)')
+            .setDesc('Adjust spacing between words (0 = normal, small values recommended)')
             .addSlider(slider => slider
-                .setLimits(0.5, 2.0, 0.1)
+                .setLimits(0.0, 0.5, 0.01)
                 .setValue(this.plugin.settings.wordSpacing)
                 .setDynamicTooltip()
                 .onChange(async (value) => {
-                    this.plugin.settings.wordSpacing = Math.round(value * 10) / 10;
+                    this.plugin.settings.wordSpacing = Math.round(value * 100) / 100;
                     await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
+                }));
+
+        new Setting(containerEl)
+            .setName('Font Size')
+            .setDesc('Default font size in pixels (can be adjusted in reader mode)')
+            .addSlider(slider => slider
+                .setLimits(8, 48, 1)
+                .setValue(this.plugin.settings.fontSize)
+                .setDynamicTooltip()
+                .onChange(async (value) => {
+                    console.log('🔧 Font size setting changed to:', value);
+                    this.plugin.settings.fontSize = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
                 }));
 
         // Transitions Section
@@ -1725,6 +2344,32 @@ class ObsidianRSettingTab extends PluginSettingTab {
                 .onChange(async (value: 'page-curl' | 'slide' | 'fade' | 'scroll') => {
                     this.plugin.settings.transitionType = value;
                     await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
                 }));
+
+        // Reset Section
+        containerEl.createEl('h3', { text: 'Reset' });
+
+        new Setting(containerEl)
+            .setName('Reset to Defaults')
+            .setDesc('Reset all settings to their default values')
+            .addButton(button => button
+                .setButtonText('Reset All Settings')
+                .setCta()
+                .onClick(async () => {
+                    // Reset settings to defaults
+                    this.plugin.settings = Object.assign({}, DEFAULT_SETTINGS);
+                    await this.plugin.saveSettings();
+
+                    // Refresh reader mode if active
+                    this.plugin.refreshReaderModeIfActive();
+
+                    // Refresh the settings display
+                    this.display();
+
+                    // Show confirmation
+                    new Notice('All settings have been reset to defaults');
+                }));
+
     }
 }
