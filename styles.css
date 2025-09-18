@@ -1,20 +1,55 @@
 /* Obsidian:R Reader Mode Styles */
 
+/* Icon styles for Lucide icons and fallbacks */
+.obsidian-r-icon-button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: var(--radius-s);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease;
+    color: var(--icon-color);
+}
+
+.obsidian-r-icon-button:hover {
+    background-color: var(--background-modifier-hover);
+    color: var(--icon-color-hover);
+}
+
+.obsidian-r-icon-button:active {
+    background-color: var(--background-modifier-active);
+}
+
+.obsidian-r-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-block;
+    line-height: 1;
+}
+
+/* Toggle icons */
+.obsidian-r-toggle-icon {
+    width: 14px;
+    height: 14px;
+    margin-right: 6px;
+    opacity: 0.7;
+}
+
 /* Ensure workspace leaf container has relative positioning for controls */
 .workspace-leaf.has-obsidian-r-controls {
     position: relative !important;
-    /* Temporary debugging styles */
-    border: 2px solid blue !important;
 }
 
-/* Don't create a full screen overlay - just add the pills */
+/* Reader mode overlay */
 .obsidian-r-reader-mode {
-    position: relative; /* Changed from fixed */
+    position: relative;
     pointer-events: none;
     z-index: 100;
 }
 
-/* Only intercept focus for keyboard events, not visual focus */
 .obsidian-r-reader-mode:focus {
     outline: none;
 }
@@ -27,75 +62,92 @@
 .obsidian-r-reader-mode .markdown-preview-view,
 .obsidian-r-reader-mode .cm-editor,
 .obsidian-r-reader-mode .cm-content {
-    cursor: text !important; /* Preserve text cursor */
+    cursor: text !important;
     pointer-events: auto;
 }
 
-/* Show controls on hover or click */
+/* Show controls on hover or when explicitly shown */
 .obsidian-r-reader-mode:hover .obsidian-r-controls,
 .obsidian-r-reader-mode.show-controls .obsidian-r-controls {
     pointer-events: auto;
 }
 
-/* Top pill - Chapter progress */
+/* Top pill - Chapter progress (positioned in content area, not header) */
 .obsidian-r-top-pill {
     position: absolute;
-    top: 20px;
+    top: 20px; /* Position within content area */
     left: 50%;
     transform: translateX(-50%);
-    background: var(--background-secondary);
+    background: var(--background-primary);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    background-color: rgba(var(--background-primary-rgb), 0.9);
     border: 1px solid var(--background-modifier-border);
-    border-radius: 20px;
-    padding: 8px 16px;
-    font-size: 12px;
-    font-weight: 500;
+    border-radius: var(--radius-m);
+    padding: 6px 14px;
+    font-size: var(--font-ui-smaller);
+    font-weight: var(--font-weight-medium);
     color: var(--text-muted);
-    z-index: 101;
+    z-index: 50; /* Enough to be visible but not overlay headers */
     pointer-events: none;
+    box-shadow: var(--shadow-s);
+    white-space: nowrap;
 }
 
-/* Bottom pill - Total progress */
+/* Ensure the pill container has relative positioning */
+.markdown-source-view,
+.markdown-reading-view,
+.workspace-leaf-content {
+    position: relative;
+}
+
+/* Bottom pill - Total progress (positioned in bottom margin) */
 .obsidian-r-bottom-pill {
     position: absolute;
-    bottom: 80px; /* Leave space for controls */
+    bottom: 12px;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--background-secondary);
+    background: var(--background-primary);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    background-color: rgba(var(--background-primary-rgb), 0.9);
     border: 1px solid var(--background-modifier-border);
-    border-radius: 20px;
-    padding: 8px 16px;
-    font-size: 12px;
-    font-weight: 500;
+    border-radius: var(--radius-m);
+    padding: 6px 14px;
+    font-size: var(--font-ui-smaller);
+    font-weight: var(--font-weight-medium);
     color: var(--text-muted);
-    z-index: 101;
+    z-index: 1000;
     pointer-events: none;
+    box-shadow: var(--shadow-s);
+    white-space: nowrap;
 }
 
-/* Controls overlay */
+/* Controls overlay - positioned above bottom pill */
 .obsidian-r-controls {
     position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    bottom: 50px; /* Position above bottom pill */
+    left: 50%;
     background: var(--background-primary);
-    border-top: 1px solid var(--background-modifier-border);
-    z-index: 102;
-    display: none;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    background-color: rgba(var(--background-primary-rgb), 0.9);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-m);
+    z-index: 1001;
     opacity: 0;
-    transform: translateY(100%);
-    transition: all 0.3s ease;
-    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+    transform: translateX(-50%) translateY(10px);
+    transition: all 0.2s ease;
+    box-shadow: var(--shadow-s);
     pointer-events: none;
-    
-    /* Temporary debugging styles */
-    border: 2px solid red !important;
-    min-height: 60px !important;
+    min-width: 400px;
+    display: block !important;
 }
 
 .obsidian-r-controls.visible {
-    opacity: 1;
-    transform: translateY(0);
-    pointer-events: auto; /* Enable interactions when visible */
+    opacity: 1 !important;
+    transform: translateX(-50%) translateY(0) !important;
+    pointer-events: auto;
 }
 
 /* Bottom bar */
@@ -103,27 +155,32 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 24px;
-    gap: 24px;
+    padding: var(--size-4-3) var(--size-4-4);
+    gap: var(--size-4-3);
 }
 
 /* Font size controls */
 .obsidian-r-font-size-group {
     display: flex;
-    gap: 8px;
+    gap: var(--size-4-1);
+    align-items: center;
 }
 
 .obsidian-r-font-size-group button {
     background: var(--interactive-normal);
     border: 1px solid var(--background-modifier-border);
-    border-radius: 6px;
-    padding: 8px 12px;
+    border-radius: var(--radius-s);
+    padding: var(--size-4-1) var(--size-4-2);
     color: var(--text-normal);
     cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
-    min-width: 40px;
-    transition: all 0.2s ease;
+    font-size: var(--font-ui-small);
+    font-weight: var(--font-weight-medium);
+    min-width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s var(--anim-motion-smooth);
 }
 
 .obsidian-r-font-size-group button:hover {
@@ -139,13 +196,14 @@
 .obsidian-r-font-select {
     background: var(--interactive-normal);
     border: 1px solid var(--background-modifier-border);
-    border-radius: 6px;
-    padding: 8px 12px;
+    border-radius: var(--radius-s);
+    padding: var(--size-4-1) var(--size-4-2);
     color: var(--text-normal);
-    font-size: 14px;
+    font-size: var(--font-ui-small);
     cursor: pointer;
     min-width: 120px;
-    transition: all 0.2s ease;
+    height: 32px;
+    transition: all 0.2s var(--anim-motion-smooth);
 }
 
 .obsidian-r-font-select:hover {
@@ -159,44 +217,90 @@
     box-shadow: 0 0 0 2px var(--interactive-accent-hover);
 }
 
-/* Pane toggles */
+/* Pane toggles group */
 .obsidian-r-pane-group {
     display: flex;
-    gap: 16px;
+    gap: var(--size-4-2);
+    align-items: center;
 }
 
+/* Toggle button styling (Obsidian-like) */
 .obsidian-r-pane-toggle {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--size-4-1);
     cursor: pointer;
-    font-size: 14px;
+    font-size: var(--font-ui-small);
     color: var(--text-normal);
     user-select: none;
-}
-
-.obsidian-r-pane-toggle input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    margin: 0;
-    cursor: pointer;
+    background: var(--interactive-normal);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    padding: var(--size-4-1) var(--size-4-2);
+    height: 32px;
+    width: 32px; /* Make square for icon-only buttons */
+    min-width: 32px;
+    justify-content: center;
+    transition: all 0.2s var(--anim-motion-smooth);
+    position: relative;
 }
 
 .obsidian-r-pane-toggle:hover {
-    color: var(--text-accent);
+    background: var(--interactive-hover);
+    border-color: var(--background-modifier-border-hover);
+    color: var(--text-normal);
+}
+
+/* Hide actual checkbox */
+.obsidian-r-pane-toggle input[type="checkbox"] {
+    display: none;
+}
+
+/* Hide text labels in toggle buttons */
+.obsidian-r-pane-toggle span {
+    display: none;
+}
+
+/* Active state for toggles */
+.obsidian-r-pane-toggle.active {
+    background: var(--interactive-accent);
+    border-color: var(--interactive-accent);
+    color: var(--text-on-accent);
+}
+
+.obsidian-r-pane-toggle.active:hover {
+    background: var(--interactive-accent-hover);
+    border-color: var(--interactive-accent-hover);
+}
+
+/* Toggle icon styling */
+.obsidian-r-pane-toggle .obsidian-r-toggle-icon {
+    opacity: 0.8;
+    margin-right: 0; /* Remove margin since we're centering */
+}
+
+.obsidian-r-pane-toggle.active .obsidian-r-toggle-icon {
+    opacity: 1;
 }
 
 /* Mobile responsive */
 @media (max-width: 768px) {
+    .obsidian-r-controls {
+        min-width: 320px;
+        left: 50%;
+        right: auto;
+    }
+    
     .obsidian-r-bottom-bar {
         flex-direction: column;
-        gap: 16px;
-        padding: 16px;
+        gap: var(--size-4-2);
+        padding: var(--size-4-2);
     }
     
     .obsidian-r-pane-group {
         justify-content: center;
         flex-wrap: wrap;
+        gap: var(--size-4-1);
     }
     
     .obsidian-r-font-size-group,
@@ -204,23 +308,10 @@
         align-self: center;
     }
     
-    /* Convert toggles to buttons on mobile */
     .obsidian-r-pane-toggle {
-        background: var(--interactive-normal);
-        border: 1px solid var(--background-modifier-border);
-        border-radius: 6px;
-        padding: 8px 12px;
-        min-width: 80px;
-        justify-content: center;
-    }
-    
-    .obsidian-r-pane-toggle input[type="checkbox"] {
-        display: none;
-    }
-    
-    .obsidian-r-pane-toggle[data-checked="true"] {
-        background: var(--interactive-accent);
-        color: white;
+        width: 32px;
+        min-width: 32px;
+        font-size: var(--font-ui-smaller);
     }
 }
 
