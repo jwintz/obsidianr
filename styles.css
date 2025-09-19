@@ -204,6 +204,41 @@
     background: var(--interactive-active);
 }
 
+/* Page navigation controls */
+.obsidian-r-page-nav-group {
+    display: flex;
+    gap: var(--size-4-1);
+    align-items: center;
+    margin-left: var(--size-4-2);
+    margin-right: var(--size-4-2);
+}
+
+.obsidian-r-page-nav-group button {
+    background: var(--interactive-accent);
+    border: 1px solid var(--accent-color);
+    border-radius: var(--radius-s);
+    padding: var(--size-4-1) var(--size-4-2);
+    color: var(--text-on-accent);
+    cursor: pointer;
+    font-size: var(--font-ui-small);
+    font-weight: var(--font-weight-medium);
+    min-width: 36px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s var(--anim-motion-smooth);
+}
+
+.obsidian-r-page-nav-group button:hover {
+    background: var(--interactive-accent-hover);
+    border-color: var(--accent-color-hover);
+}
+
+.obsidian-r-page-nav-group button:active {
+    background: var(--interactive-accent-active);
+}
+
 /* Font family dropdown */
 .obsidian-r-font-select {
     background: var(--interactive-normal);
@@ -363,4 +398,50 @@
 /* Smooth transitions */
 .obsidian-r-reader-mode * {
     transition: font-size 0.3s ease, font-family 0.3s ease, line-height 0.3s ease;
+}
+
+/* Page Transition Effects */
+.obsidian-r-page-transition {
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
+}
+
+.obsidian-r-page-transition.fade {
+    transition: opacity 0.3s ease-in-out;
+}
+
+.obsidian-r-page-transition.slide {
+    transition: transform 0.3s ease-in-out;
+}
+
+.obsidian-r-page-transition.page-curl {
+    transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.obsidian-r-page-transition.scroll {
+    transition: transform 0.4s ease-out, opacity 0.4s ease-out;
+}
+
+/* Pagination Layout */
+.obsidian-r-paginated {
+    overflow: hidden !important;
+}
+
+.obsidian-r-paginated .markdown-preview-sizer {
+    overflow: hidden !important;
+}
+
+.obsidian-r-paginated .markdown-reading-view,
+.obsidian-r-paginated .markdown-preview-view,
+.obsidian-r-paginated .workspace-leaf-content,
+.obsidian-r-paginated .cm-scroller,
+.obsidian-r-paginated .markdown-preview-section {
+    overflow: hidden !important;
+    overflow-y: hidden !important;
+    overflow-x: hidden !important;
+}
+
+/* Content container for smooth transitions */
+.obsidian-r-content-container {
+    transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
 }

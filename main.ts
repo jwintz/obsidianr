@@ -16,7 +16,7 @@ interface BookStructure {
 
 interface ObsidianRSettings {
     // Transitions
-    transitionType: 'page-curl' | 'slide' | 'fade' | 'scroll';
+    transitionType: 'none' | 'page-curl' | 'slide' | 'fade' | 'scroll';
 
     // Format
     justified: boolean;
@@ -51,15 +51,19 @@ interface ReaderModeState {
     files: string[]; // ordered list of file paths in the book
     globalPage: number; // current page in the entire book
     globalTotalPages: number; // total pages in the entire book
+    // Add pagination-specific state
+    isPaginated: boolean; // whether content is currently paginated
+    paginatedContent: string[]; // array of page content
+    currentPageIndex: number; // 0-based index of current page
 }
 
 const DEFAULT_SETTINGS: ObsidianRSettings = {
     transitionType: 'page-curl',
     justified: true,
-    horizontalMargins: 10, // 10% margins
+    horizontalMargins: 5, // 5% margins
     columns: 1,
     lineSpacing: 1.5, // Improved readability - typical for ebooks
-    characterSpacing: 0.02, // Slight letter spacing for better readability
+    characterSpacing: 0.00, // Slight letter spacing for better readability
     wordSpacing: 0.0, // Normal word spacing (0 = browser default)
     fontSize: 16,
     fontFamily: 'Charter',
@@ -274,8 +278,13 @@ export default class ObsidianRPlugin extends Plugin {
         contentHeight: 0,
         files: [],
         globalPage: 1,
-        globalTotalPages: 1
+        globalTotalPages: 1,
+        isPaginated: false,
+        paginatedContent: [],
+        currentPageIndex: 0
     };
+    private paginationInProgress = false; // Prevent recursive pagination calls
+    private originalContentBackup: string | null = null; // Store original content before any modifications
     private readerModeEl: HTMLElement | null = null;
     private controlsEl: HTMLElement | null = null;
     private hideControlsTimeout: number | null = null;
@@ -285,6 +294,11 @@ export default class ObsidianRPlugin extends Plugin {
     private readerKeyboardHandler: ((event: KeyboardEvent) => void) | null = null;
     private zenMode: boolean = false;
     private originalViewMode: 'source' | 'preview' | null = null;
+
+    // Pagination listeners
+    private resizeListener: ((event: Event) => void) | null = null;
+    private resizeObserver: ResizeObserver | null = null;
+    private resizeTimeout: NodeJS.Timeout | null = null;
 
     async onload() {
         console.log('Loading Obsidian:R plugin');
@@ -604,6 +618,14 @@ export default class ObsidianRPlugin extends Plugin {
         this.registerEvent(
             this.app.workspace.on('layout-change', () => {
                 setTimeout(() => this.updateFileExplorerDecorations(), 200);
+
+                // Also refresh reader mode pagination if active
+                if (this.readerModeState.isActive && this.readerModeState.isPaginated) {
+                    console.log('📏 Layout changed - refreshing reader mode pagination');
+                    setTimeout(() => {
+                        this.refreshReaderModeIfActive();
+                    }, 300);
+                }
             })
         );
 
@@ -759,7 +781,7 @@ export default class ObsidianRPlugin extends Plugin {
         await this.calculatePageNumbers();
 
         // Create reader mode UI
-        this.createReaderModeUI();
+        await this.createReaderModeUI();
         this.showReaderControls();
 
         // Apply visual styling to content area
@@ -767,6 +789,15 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Add reader mode keyboard handlers
         this.addReaderModeKeyboardHandlers();
+
+        // Enable pagination with improved approach
+        setTimeout(() => {
+            console.log('⏰ Starting safer pagination...');
+            this.safePaginateContent();
+
+            // Add resize listener for viewport geometry changes
+            this.addPaginationListeners();
+        }, 800); // Longer delay to ensure everything is stable
 
         console.log('Reader mode UI created and controls shown');
         new Notice('Reader mode activated');
@@ -843,7 +874,7 @@ export default class ObsidianRPlugin extends Plugin {
         }
 
         const css = `
-            /* Target the actual content container - the markdown-preview-sizer */
+            /* Reader mode typography and layout styles */
             .obsidian-r-active .markdown-preview-sizer,
             .workspace-leaf.has-obsidian-r-controls .markdown-preview-sizer,
             .workspace-leaf-content.has-obsidian-r-controls .markdown-preview-sizer {
@@ -851,6 +882,8 @@ export default class ObsidianRPlugin extends Plugin {
                 margin: 0 auto !important;
                 padding-left: ${horizontalMarginPx}px !important;
                 padding-right: ${horizontalMarginPx}px !important;
+                padding-top: 60px !important; /* Top margin for breathing room */
+                padding-bottom: 120px !important; /* Bottom margin to avoid pills/controls overlap */
                 box-sizing: border-box !important;
                 font-family: '${this.settings.fontFamily}', serif !important;
                 font-size: ${this.settings.fontSize}px !important;
@@ -872,7 +905,10 @@ export default class ObsidianRPlugin extends Plugin {
                     column-gap: 30px;
                     column-fill: auto;
                 ` : ''}
+                /* Reader mode styles - removed pagination constraints for now */
             }
+
+            /* Reader mode typography and layout styles */
 
             /* Also apply to CM editor for edit mode */
             .obsidian-r-active .cm-editor,
@@ -984,6 +1020,723 @@ export default class ObsidianRPlugin extends Plugin {
     }
 
     /**
+     * Paginates the current content based on viewport size and settings
+     */
+    private async paginateContent() {
+        console.log('📖 Starting content pagination...');
+
+        const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeMarkdownView) {
+            console.log('❌ No active markdown view for pagination');
+            return;
+        }
+
+        // Try multiple selectors to find the content element
+        let contentEl = activeMarkdownView.containerEl.querySelector('.markdown-preview-sizer') as HTMLElement;
+        if (!contentEl) {
+            contentEl = activeMarkdownView.containerEl.querySelector('.markdown-reading-view .markdown-preview-sizer') as HTMLElement;
+        }
+        if (!contentEl) {
+            contentEl = activeMarkdownView.containerEl.querySelector('.markdown-preview-view .markdown-preview-sizer') as HTMLElement;
+        }
+        if (!contentEl) {
+            contentEl = activeMarkdownView.containerEl.querySelector('.view-content .markdown-preview-sizer') as HTMLElement;
+        }
+
+        if (!contentEl) {
+            console.log('❌ No content element found for pagination');
+            return;
+        }
+
+        console.log('✅ Found content element for pagination:', contentEl.className);
+
+        // Get viewport dimensions - use content container's actual available space
+        const containerHeight = activeMarkdownView.containerEl.offsetHeight;
+        const viewportHeight = Math.max(600, containerHeight - 120); // Ensure minimum height and leave space for controls
+        const viewportWidth = contentEl.offsetWidth;
+
+        console.log('📏 Viewport dimensions:', {
+            viewportHeight,
+            viewportWidth,
+            containerHeight,
+            windowHeight: window.innerHeight
+        });
+
+        // Store original content and clone for measurement
+        let originalContent = contentEl.innerHTML;
+
+        // If we have a backup of truly original content, use that instead
+        if (this.originalContentBackup && this.paginationInProgress) {
+            console.log('📖 Using backed up original content instead of current content');
+            originalContent = this.originalContentBackup;
+        } else if (!this.originalContentBackup) {
+            // First time - backup the original content
+            this.originalContentBackup = originalContent;
+            console.log('📖 Backed up original content for future pagination calls');
+        }
+
+        // Create a temporary container with exact same styling for measurement
+        const tempContainer = document.createElement('div');
+        tempContainer.innerHTML = originalContent;
+
+        // Apply exact same styles as the content element
+        const contentStyles = window.getComputedStyle(contentEl);
+        tempContainer.style.cssText = contentStyles.cssText;
+        tempContainer.style.position = 'absolute';
+        tempContainer.style.top = '-9999px';
+        tempContainer.style.left = '-9999px';
+        tempContainer.style.width = viewportWidth + 'px';
+        tempContainer.style.height = 'auto';
+        tempContainer.style.overflow = 'visible';
+        tempContainer.style.maxHeight = 'none';
+
+        // Append to document for measurement
+        document.body.appendChild(tempContainer);
+
+        // Get all content elements (paragraphs, headings, etc.)
+        const contentElements = Array.from(tempContainer.children) as HTMLElement[];
+        const pages: string[] = [];
+        let currentPageContent = '';
+        let currentPageHeight = 0;
+
+        console.log('📖 Processing', contentElements.length, 'content elements for pagination');
+        console.log('📖 Target viewport height:', viewportHeight);
+        console.log('📖 Content container dimensions:', {
+            width: tempContainer.offsetWidth,
+            height: tempContainer.offsetHeight,
+            scrollWidth: tempContainer.scrollWidth,
+            scrollHeight: tempContainer.scrollHeight
+        });
+
+        for (let i = 0; i < contentElements.length; i++) {
+            const element = contentElements[i];
+            const elementHeight = element.offsetHeight;
+            const elementRect = element.getBoundingClientRect();
+
+            console.log(`📏 Element ${i}: ${element.tagName} height=${elementHeight}px rect=${Math.round(elementRect.height)}px content="${element.textContent?.substring(0, 50) || ''}..."`);
+
+            // Skip empty elements (height 0)
+            if (elementHeight === 0) {
+                currentPageContent += element.outerHTML;
+                console.log(`📏   → Skipped (height 0), added to current page`);
+                continue;
+            }
+
+            // Check if adding this element would exceed viewport height
+            if (currentPageHeight + elementHeight > viewportHeight && currentPageContent.length > 0) {
+                // Save current page and start new one
+                pages.push(currentPageContent);
+                console.log(`📄 Page ${pages.length} created: height ~${currentPageHeight}px (${Math.round(currentPageHeight / viewportHeight * 100)}% of viewport)`);
+                console.log(`📄   Content length: ${currentPageContent.length} chars`);
+                currentPageContent = element.outerHTML;
+                currentPageHeight = elementHeight;
+                console.log(`📄   Starting new page with element ${i}`);
+            } else {
+                // Add element to current page
+                currentPageContent += element.outerHTML;
+                currentPageHeight += elementHeight;
+                console.log(`📏   → Added to current page. Page height now: ${currentPageHeight}px`);
+            }
+        }
+
+        // Add the last page if it has content
+        if (currentPageContent.length > 0) {
+            pages.push(currentPageContent);
+            console.log(`📄 Final page ${pages.length} created: height ~${currentPageHeight}px (${Math.round(currentPageHeight / viewportHeight * 100)}% of viewport)`);
+            console.log(`📄   Content length: ${currentPageContent.length} chars`);
+        }
+
+        // Clean up temporary container
+        document.body.removeChild(tempContainer);
+
+        // Ensure we have at least one page
+        if (pages.length === 0) {
+            pages.push(originalContent);
+            console.log('� No pages created, using original content as single page');
+        }
+
+        console.log('📖 Pagination complete:', {
+            totalPages: pages.length,
+            viewportHeight,
+            originalContentLength: originalContent.length,
+            totalPaginatedLength: pages.reduce((sum, page) => sum + page.length, 0),
+            averagePageLength: Math.round(pages.reduce((sum, page) => sum + page.length, 0) / pages.length),
+            pagesPreview: pages.map((p, i) => `Page ${i + 1}: ${p.length} chars`)
+        });
+
+        // Update pagination state with detailed logging
+        console.log('📖 Updating pagination state...');
+        console.log('📖 Previous state:', {
+            isPaginated: this.readerModeState.isPaginated,
+            currentPageIndex: this.readerModeState.currentPageIndex,
+            chapterTotalPages: this.readerModeState.chapterTotalPages,
+            chapterPage: this.readerModeState.chapterPage
+        });
+
+        this.readerModeState.isPaginated = true;
+        this.readerModeState.paginatedContent = pages;
+        this.readerModeState.currentPageIndex = 0;
+        this.readerModeState.chapterTotalPages = pages.length;
+        this.readerModeState.chapterPage = 1;
+
+        console.log('📖 New state:', {
+            isPaginated: this.readerModeState.isPaginated,
+            currentPageIndex: this.readerModeState.currentPageIndex,
+            chapterTotalPages: this.readerModeState.chapterTotalPages,
+            chapterPage: this.readerModeState.chapterPage,
+            paginatedContentCount: this.readerModeState.paginatedContent.length
+        });
+
+        // Apply proper constraints to content element - use exact calculated height
+        console.log('📖 Applying content element constraints...');
+        console.log('📖 Content element before constraints:', {
+            className: contentEl.className,
+            offsetWidth: contentEl.offsetWidth,
+            offsetHeight: contentEl.offsetHeight,
+            scrollWidth: contentEl.scrollWidth,
+            scrollHeight: contentEl.scrollHeight,
+            computedHeight: window.getComputedStyle(contentEl).height,
+            computedMaxHeight: window.getComputedStyle(contentEl).maxHeight
+        });
+
+        contentEl.style.height = viewportHeight + 'px';
+        contentEl.style.overflow = 'hidden';
+        contentEl.style.overflowY = 'hidden';
+        contentEl.style.overflowX = 'hidden';
+        contentEl.style.minHeight = viewportHeight + 'px';
+        contentEl.style.maxHeight = viewportHeight + 'px';
+
+        console.log('📖 Content element after constraints:', {
+            offsetWidth: contentEl.offsetWidth,
+            offsetHeight: contentEl.offsetHeight,
+            scrollWidth: contentEl.scrollWidth,
+            scrollHeight: contentEl.scrollHeight,
+            appliedHeight: viewportHeight + 'px',
+            computedHeight: window.getComputedStyle(contentEl).height,
+            computedMaxHeight: window.getComputedStyle(contentEl).maxHeight
+        });
+
+        // Display first page
+        this.displayCurrentPage(true);
+
+        console.log('📖 Pagination applied - content constrained to viewport without scrollbars');
+    }
+
+    /**
+     * Displays the current page content with transitions
+     */
+    private displayCurrentPage(isInitialLoad: boolean = false) {
+        console.log('📖 displayCurrentPage called with state:', {
+            isPaginated: this.readerModeState.isPaginated,
+            contentLength: this.readerModeState.paginatedContent?.length || 0,
+            currentPageIndex: this.readerModeState.currentPageIndex,
+            chapterPage: this.readerModeState.chapterPage
+        });
+
+        if (!this.readerModeState.isPaginated || this.readerModeState.paginatedContent.length === 0) {
+            console.log('❌ No paginated content to display');
+            return;
+        }
+
+        const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeMarkdownView) {
+            console.log('❌ No active markdown view for display');
+            return;
+        }
+
+        // Try multiple selectors to find the content element
+        let contentEl = activeMarkdownView.containerEl.querySelector('.markdown-preview-sizer') as HTMLElement;
+        if (!contentEl) {
+            contentEl = activeMarkdownView.containerEl.querySelector('.markdown-reading-view .markdown-preview-sizer') as HTMLElement;
+        }
+        if (!contentEl) {
+            contentEl = activeMarkdownView.containerEl.querySelector('.markdown-preview-view .markdown-preview-sizer') as HTMLElement;
+        }
+        if (!contentEl) {
+            contentEl = activeMarkdownView.containerEl.querySelector('.view-content .markdown-preview-sizer') as HTMLElement;
+        }
+
+        if (!contentEl) {
+            console.log('❌ No content element found with any selector');
+            console.log('Available elements:', Array.from(activeMarkdownView.containerEl.querySelectorAll('*')).map(el => el.className).filter(c => c));
+            return;
+        }
+
+        console.log('✅ Found content element:', contentEl.className, 'with selector');
+
+        // Ensure current page index is valid
+        if (this.readerModeState.currentPageIndex >= this.readerModeState.paginatedContent.length) {
+            console.log('⚠️ Current page index out of bounds, resetting to 0');
+            this.readerModeState.currentPageIndex = 0;
+        }
+
+        const currentPageContent = this.readerModeState.paginatedContent[this.readerModeState.currentPageIndex];
+
+        console.log('📖 Displaying page', this.readerModeState.currentPageIndex + 1, 'of', this.readerModeState.paginatedContent.length);
+        console.log('📖 Content preview:', currentPageContent?.substring(0, 100) + '...');
+        console.log('📖 Using transition:', this.settings.transitionType);
+
+        // Apply transition based on settings
+        console.log('📖 About to apply page transition...');
+        this.applyPageTransition(contentEl, currentPageContent, isInitialLoad);
+        console.log('📖 Page transition applied');
+
+        // Update page numbers
+        this.readerModeState.chapterPage = this.readerModeState.currentPageIndex + 1;
+        console.log('📖 About to update pills...');
+        this.updatePills();
+        console.log('📖 Pills updated');
+    }
+
+    /**
+     * Safer pagination that doesn't break existing content display
+     */
+    private async safePaginateContent() {
+        console.log('📖 Starting safe content pagination...');
+
+        if (this.paginationInProgress) {
+            console.log('📖 Pagination already in progress, skipping...');
+            return;
+        }
+
+        this.paginationInProgress = true;
+
+        try {
+            const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (!activeMarkdownView) {
+                console.log('❌ No active markdown view for safe pagination');
+                return;
+            }
+
+            // Try multiple selectors to find the content element
+            let contentEl = activeMarkdownView.containerEl.querySelector('.markdown-preview-sizer') as HTMLElement;
+            if (!contentEl) {
+                contentEl = activeMarkdownView.containerEl.querySelector('.markdown-reading-view .markdown-preview-sizer') as HTMLElement;
+            }
+            if (!contentEl) {
+                contentEl = activeMarkdownView.containerEl.querySelector('.markdown-preview-view .markdown-preview-sizer') as HTMLElement;
+            }
+
+            if (!contentEl) {
+                console.log('❌ No content element found for safe pagination - keeping content as-is');
+                return;
+            }
+
+            console.log('✅ Found content element for safe pagination');
+
+            // Apply pagination CSS classes for proper scrollbar hiding
+            const containerEl = activeMarkdownView.containerEl;
+            const markdownViewEl = containerEl.querySelector('.markdown-reading-view') ||
+                containerEl.querySelector('.markdown-preview-view');
+
+            if (markdownViewEl) {
+                markdownViewEl.classList.add('obsidian-r-paginated');
+                console.log('✅ Applied obsidian-r-paginated class to markdown view');
+            }
+
+            // Apply styles to all parent containers to ensure no scrollbars anywhere
+            const containerHeight = activeMarkdownView.containerEl.offsetHeight;
+            const viewportHeight = Math.max(600, containerHeight - 120); // Use same calculation as paginateContent
+
+            console.log('📖 Safe pagination viewport height:', viewportHeight);
+
+            // Apply constraints to the markdown view container
+            if (markdownViewEl) {
+                (markdownViewEl as HTMLElement).style.height = viewportHeight + 'px';
+                (markdownViewEl as HTMLElement).style.overflow = 'hidden';
+                (markdownViewEl as HTMLElement).style.overflowY = 'hidden';
+                (markdownViewEl as HTMLElement).style.overflowX = 'hidden';
+                (markdownViewEl as HTMLElement).style.maxHeight = viewportHeight + 'px';
+            }
+
+            // Apply constraints to the workspace leaf content
+            const leafContent = containerEl.querySelector('.workspace-leaf-content') as HTMLElement;
+            if (leafContent) {
+                leafContent.style.overflow = 'hidden';
+                leafContent.style.overflowY = 'hidden';
+                leafContent.style.maxHeight = viewportHeight + 'px';
+            }
+
+            // Apply constraints to any additional scroll containers
+            const scrollSelectors = [
+                '.cm-scroller',
+                '.markdown-preview-section',
+                '.markdown-source-view',
+                '.cm-editor',
+                '.cm-content'
+            ];
+
+            scrollSelectors.forEach(selector => {
+                const elements = containerEl.querySelectorAll(selector) as NodeListOf<HTMLElement>;
+                elements.forEach((element, index) => {
+                    element.style.overflow = 'hidden';
+                    element.style.overflowY = 'hidden';
+                    element.style.overflowX = 'hidden';
+                    element.style.maxHeight = viewportHeight + 'px';
+                    console.log(`📖 Applied constraints to ${selector} element ${index + 1}`);
+                });
+            });
+
+            // Apply constraints to the main content container
+            contentEl.style.height = viewportHeight + 'px';
+            contentEl.style.overflow = 'hidden';
+            contentEl.style.overflowY = 'hidden';
+            contentEl.style.overflowX = 'hidden';
+            contentEl.style.maxHeight = viewportHeight + 'px';
+
+            console.log('📖 Container constraints applied, now calling actual pagination...');
+
+            // Call the actual pagination method to split content into pages
+            await this.paginateContent();
+
+            console.log('📖 Safe pagination complete - all scrollbars hidden and content paginated');
+        } finally {
+            this.paginationInProgress = false;
+        }
+    }
+
+    /**
+     * Adds listeners for pagination recalculation triggers
+     */
+    private addPaginationListeners() {
+        console.log('📏 Adding pagination listeners for geometry and settings changes');
+
+        // Window resize listener
+        const resizeHandler = () => {
+            if (this.readerModeState.isActive && this.readerModeState.isPaginated) {
+                console.log('📏 Window resized - recalculating pagination');
+                // Debounce resize events
+                clearTimeout(this.resizeTimeout);
+                this.resizeTimeout = setTimeout(() => {
+                    this.safePaginateContent();
+                }, 300);
+            }
+        };
+
+        window.addEventListener('resize', resizeHandler);
+        this.resizeListener = resizeHandler;
+
+        // Tab container resize observer for when sidebar is toggled
+        const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (activeMarkdownView?.containerEl) {
+            this.resizeObserver = new ResizeObserver((entries) => {
+                if (this.readerModeState.isActive && this.readerModeState.isPaginated && !this.paginationInProgress) {
+                    console.log('📏 Container resized - recalculating pagination');
+                    // Save current page state before recalculation
+                    const currentPageIndex = this.readerModeState.currentPageIndex;
+                    const currentChapterPage = this.readerModeState.chapterPage;
+
+                    // Debounce resize events with longer delay to prevent initial setup interference
+                    clearTimeout(this.resizeTimeout);
+                    this.resizeTimeout = setTimeout(() => {
+                        console.log('📏 Preserving current page state:', { currentPageIndex, currentChapterPage });
+                        this.safePaginateContent().then(() => {
+                            // Restore page position if valid
+                            if (currentPageIndex < this.readerModeState.paginatedContent.length) {
+                                this.readerModeState.currentPageIndex = currentPageIndex;
+                                this.readerModeState.chapterPage = currentChapterPage;
+                                console.log('📏 Restored page position after recalculation');
+                                this.displayCurrentPage();
+                            }
+                        });
+                    }, 500); // Increased delay to prevent interference with initial setup
+                }
+            });
+
+            this.resizeObserver.observe(activeMarkdownView.containerEl);
+
+            // Small delay before resize observer becomes active to prevent interference with initial setup
+            setTimeout(() => {
+                console.log('📏 Resize observer now active for recalculation');
+            }, 1000);
+        }
+
+        console.log('📏 Pagination listeners added successfully');
+    }
+
+    /**
+     * Removes pagination listeners
+     */
+    private removePaginationListeners() {
+        console.log('📏 Removing pagination listeners');
+
+        if (this.resizeListener) {
+            window.removeEventListener('resize', this.resizeListener);
+            this.resizeListener = null;
+        }
+
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+            this.resizeObserver = null;
+        }
+
+        if (this.resizeTimeout) {
+            clearTimeout(this.resizeTimeout);
+            this.resizeTimeout = null;
+        }
+
+        console.log('📏 Pagination listeners removed');
+    }
+
+    /**
+     * Updates page navigation button states
+     */
+    private updatePageNavigation() {
+        // For now, just enable the buttons for chapter navigation
+        console.log('📄 Page navigation updated for chapter-level navigation');
+    }
+
+    /**
+     * Applies page transition effects based on settings
+     */
+    private applyPageTransition(contentEl: HTMLElement, newContent: string, isInitialLoad: boolean = false) {
+        const transitionType = this.settings.transitionType;
+
+        console.log('🎬 Applying transition:', transitionType, 'to content length:', newContent.length);
+
+        // Skip animation for initial load - just update content directly
+        if (isInitialLoad) {
+            console.log('🎬 Initial load - updating content directly without animation');
+            contentEl.innerHTML = newContent;
+            console.log('🎬 Content updated, new innerHTML length:', contentEl.innerHTML.length);
+
+            // Force a repaint to ensure content is visible
+            contentEl.style.display = 'none';
+            contentEl.offsetHeight; // Trigger reflow
+            contentEl.style.display = '';
+            return;
+        }
+
+        // Remove any existing transition classes
+        contentEl.classList.remove('obsidian-r-page-transition', 'page-curl', 'slide', 'fade', 'scroll');
+
+        switch (transitionType) {
+            case 'none':
+                // No transition, just update content immediately
+                console.log('🎬 No transition - updating content directly');
+                contentEl.innerHTML = newContent;
+                console.log('🎬 Content updated, new innerHTML length:', contentEl.innerHTML.length);
+
+                // Force a repaint to ensure content is visible
+                contentEl.style.display = 'none';
+                contentEl.offsetHeight; // Trigger reflow
+                contentEl.style.display = '';
+                break;
+            case 'fade':
+                this.applyFadeTransition(contentEl, newContent);
+                break;
+            case 'slide':
+                this.applySlideTransition(contentEl, newContent);
+                break;
+            case 'page-curl':
+                this.applyPageCurlTransition(contentEl, newContent);
+                break;
+            case 'scroll':
+                this.applyScrollTransition(contentEl, newContent);
+                break;
+            default:
+                // No transition, just update content immediately
+                console.log('🎬 No transition - updating content directly');
+                contentEl.innerHTML = newContent;
+                console.log('🎬 Content updated, new innerHTML length:', contentEl.innerHTML.length);
+
+                // Force a repaint to ensure content is visible
+                contentEl.style.display = 'none';
+                contentEl.offsetHeight; // Trigger reflow
+                contentEl.style.display = '';
+                break;
+        }
+    }
+
+    /**
+     * Applies fade transition
+     */
+    private applyFadeTransition(contentEl: HTMLElement, newContent: string) {
+        contentEl.style.transition = 'opacity 0.3s ease-in-out';
+        contentEl.style.opacity = '0';
+
+        setTimeout(() => {
+            contentEl.innerHTML = newContent;
+            contentEl.style.opacity = '1';
+        }, 150);
+    }
+
+    /**
+     * Applies slide transition
+     */
+    private applySlideTransition(contentEl: HTMLElement, newContent: string) {
+        contentEl.style.transition = 'transform 0.3s ease-in-out';
+        contentEl.style.transform = 'translateX(-100%)';
+
+        setTimeout(() => {
+            contentEl.innerHTML = newContent;
+            contentEl.style.transform = 'translateX(100%)';
+
+            // Slide in from right
+            setTimeout(() => {
+                contentEl.style.transform = 'translateX(0)';
+            }, 50);
+        }, 150);
+    }
+
+    /**
+     * Applies page curl transition
+     */
+    private applyPageCurlTransition(contentEl: HTMLElement, newContent: string) {
+        contentEl.style.transition = 'transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+        contentEl.style.transformOrigin = 'top left';
+        contentEl.style.transform = 'rotateY(-15deg) scale(0.95)';
+        contentEl.style.opacity = '0.8';
+
+        setTimeout(() => {
+            contentEl.innerHTML = newContent;
+            contentEl.style.transform = 'rotateY(15deg) scale(0.95)';
+
+            // Rotate back to normal
+            setTimeout(() => {
+                contentEl.style.transform = 'rotateY(0deg) scale(1)';
+                contentEl.style.opacity = '1';
+            }, 50);
+        }, 250);
+    }
+
+    /**
+     * Applies scroll transition
+     */
+    private applyScrollTransition(contentEl: HTMLElement, newContent: string) {
+        contentEl.style.transition = 'transform 0.4s ease-out';
+        contentEl.style.transform = 'translateY(-20px)';
+        contentEl.style.opacity = '0.7';
+
+        setTimeout(() => {
+            contentEl.innerHTML = newContent;
+            contentEl.style.transform = 'translateY(20px)';
+
+            // Slide in from bottom
+            setTimeout(() => {
+                contentEl.style.transform = 'translateY(0)';
+                contentEl.style.opacity = '1';
+            }, 50);
+        }, 200);
+    }
+
+    /**
+     * Navigates to the next page
+     */
+    private nextPage() {
+        console.log('➡️ Next page clicked');
+        console.log('📊 Current state:', {
+            isPaginated: this.readerModeState.isPaginated,
+            currentPageIndex: this.readerModeState.currentPageIndex,
+            totalPages: this.readerModeState.paginatedContent.length,
+            chapterPage: this.readerModeState.chapterPage,
+            chapterTotalPages: this.readerModeState.chapterTotalPages
+        });
+
+        if (!this.readerModeState.isPaginated) {
+            console.log('⚠️ Not in paginated mode');
+            return;
+        }
+
+        if (this.readerModeState.paginatedContent.length === 0) {
+            console.log('⚠️ No paginated content available');
+            return;
+        }
+
+        // Navigate to next page within current chapter
+        if (this.readerModeState.currentPageIndex < this.readerModeState.paginatedContent.length - 1) {
+            this.readerModeState.currentPageIndex++;
+            this.readerModeState.chapterPage = this.readerModeState.currentPageIndex + 1;
+            console.log('📖 Moved to page', this.readerModeState.chapterPage, 'of', this.readerModeState.chapterTotalPages);
+            console.log('📖 About to call displayCurrentPage...');
+            this.displayCurrentPage();
+            console.log('📖 displayCurrentPage completed');
+        } else {
+            console.log('📖 Already on last page of chapter');
+            // Optionally go to next chapter when reaching end
+            // this.nextChapter();
+        }
+    }
+
+    /**
+     * Navigates to the previous page
+     */
+    private previousPage() {
+        console.log('⬅️ Previous page clicked');
+        console.log('📊 Current state:', {
+            isPaginated: this.readerModeState.isPaginated,
+            currentPageIndex: this.readerModeState.currentPageIndex,
+            totalPages: this.readerModeState.paginatedContent.length,
+            chapterPage: this.readerModeState.chapterPage,
+            chapterTotalPages: this.readerModeState.chapterTotalPages
+        });
+
+        if (!this.readerModeState.isPaginated) {
+            console.log('⚠️ Not in paginated mode');
+            return;
+        }
+
+        if (this.readerModeState.paginatedContent.length === 0) {
+            console.log('⚠️ No paginated content available');
+            return;
+        }
+
+        // Navigate to previous page within current chapter
+        if (this.readerModeState.currentPageIndex > 0) {
+            this.readerModeState.currentPageIndex--;
+            this.readerModeState.chapterPage = this.readerModeState.currentPageIndex + 1;
+            console.log('📖 Moved to page', this.readerModeState.chapterPage, 'of', this.readerModeState.chapterTotalPages);
+            console.log('📖 About to call displayCurrentPage...');
+            this.displayCurrentPage();
+            console.log('📖 displayCurrentPage completed');
+        } else {
+            console.log('📖 Already on first page of chapter');
+            // Optionally go to previous chapter when reaching beginning
+            // this.previousChapter();
+        }
+    }
+
+    /**
+     * Navigates to next chapter
+     */
+    private async nextChapter() {
+        if (!this.readerModeState.currentBook) return;
+
+        const chapters = this.readerModeState.currentBook.chapters;
+        const currentIndex = chapters.findIndex(ch => ch.path === this.readerModeState.currentChapter?.path);
+
+        if (currentIndex >= 0 && currentIndex < chapters.length - 1) {
+            const nextChapter = chapters[currentIndex + 1];
+            // Open the next chapter file
+            await this.app.workspace.openLinkText(nextChapter.path, '', false);
+            // Wait a moment for the file to load, then re-paginate
+            setTimeout(() => {
+                this.paginateContent();
+            }, 100);
+        }
+    }
+
+    /**
+     * Navigates to previous chapter
+     */
+    private async previousChapter() {
+        if (!this.readerModeState.currentBook) return;
+
+        const chapters = this.readerModeState.currentBook.chapters;
+        const currentIndex = chapters.findIndex(ch => ch.path === this.readerModeState.currentChapter?.path);
+
+        if (currentIndex > 0) {
+            const prevChapter = chapters[currentIndex - 1];
+            // Open the previous chapter file
+            await this.app.workspace.openLinkText(prevChapter.path, '', false);
+            // Wait a moment for the file to load, then re-paginate
+            setTimeout(() => {
+                this.paginateContent();
+            }, 100);
+        }
+    }
+
+    /**
      * Exits reader mode
      */
     async exitReaderMode() {
@@ -997,6 +1750,14 @@ export default class ObsidianRPlugin extends Plugin {
         this.readerModeState.currentBook = null;
         this.readerModeState.currentChapter = null;
 
+        // Clean up pagination state
+        this.readerModeState.isPaginated = false;
+        this.readerModeState.paginatedContent = [];
+        this.readerModeState.currentPageIndex = 0;
+
+        // Clear content backup
+        this.originalContentBackup = null;
+
         console.log('Reader mode state cleared');
 
         // Restore UI elements if zen mode was enabled
@@ -1006,6 +1767,9 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Remove reader mode keyboard handlers
         this.removeReaderModeKeyboardHandlers();
+
+        // Clean up pagination listeners
+        this.removePaginationListeners();
 
         // Clean up scroll listener
         this.removeScrollListener();
@@ -1038,7 +1802,7 @@ export default class ObsidianRPlugin extends Plugin {
     /**
      * Creates the reader mode UI - pills and controls only, no overlay
      */
-    private createReaderModeUI() {
+    private async createReaderModeUI() {
         if (this.readerModeEl) return;
 
         console.log('Creating reader mode UI without blocking overlay...');
@@ -1082,7 +1846,7 @@ export default class ObsidianRPlugin extends Plugin {
         this.readerModeEl.appendChild(bottomPill.cloneNode(true));
 
         // Create controls overlay
-        this.createReaderControls();
+        await this.createReaderControls();
 
         // Update pills with calculated values
         this.updatePills();
@@ -1093,7 +1857,7 @@ export default class ObsidianRPlugin extends Plugin {
     /**
      * Creates the reader controls overlay
      */
-    private createReaderControls() {
+    private async createReaderControls() {
         console.log('createReaderControls() called');
         if (this.controlsEl) {
             console.log('Controls element already exists, returning early');
@@ -1122,7 +1886,7 @@ export default class ObsidianRPlugin extends Plugin {
         fontSizeGroup.className = 'obsidian-r-font-size-group';
 
         // Create font size buttons asynchronously
-        Promise.all([
+        const fontSizePromise = Promise.all([
             IconManager.createIconButton('a-arrow-down', 'Decrease font size', () => this.adjustFontSize(-1)),
             IconManager.createIconButton('a-arrow-up', 'Increase font size', () => this.adjustFontSize(1))
         ]).then(([decreaseFontBtn, increaseFontBtn]) => {
@@ -1131,6 +1895,68 @@ export default class ObsidianRPlugin extends Plugin {
             // Refresh icons after DOM insertion for mobile compatibility
             IconManager.refreshIcons(fontSizeGroup);
         });
+
+        // Page navigation controls - simplified to avoid async issues
+        const pageNavGroup = document.createElement('div');
+        pageNavGroup.className = 'obsidian-r-page-nav-group';
+        pageNavGroup.style.cssText = `
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin: 0 12px;
+        `;
+
+        // Create simple text buttons for now to test
+        const prevPageBtn = document.createElement('button');
+        prevPageBtn.textContent = '←';
+        prevPageBtn.title = 'Previous chapter';
+        prevPageBtn.className = 'obsidian-r-nav-button';
+        prevPageBtn.style.cssText = `
+            background: var(--interactive-accent);
+            border: 1px solid var(--accent-color);
+            border-radius: var(--radius-s);
+            padding: 6px 12px;
+            color: var(--text-on-accent);
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            min-width: 36px;
+            height: 32px;
+        `;
+        prevPageBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('🖱️ Previous button clicked');
+            this.previousPage();
+        });
+
+        const nextPageBtn = document.createElement('button');
+        nextPageBtn.textContent = '→';
+        nextPageBtn.title = 'Next chapter';
+        nextPageBtn.className = 'obsidian-r-nav-button';
+        nextPageBtn.style.cssText = `
+            background: var(--interactive-accent);
+            border: 1px solid var(--accent-color);
+            border-radius: var(--radius-s);
+            padding: 6px 12px;
+            color: var(--text-on-accent);
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            min-width: 36px;
+            height: 32px;
+        `;
+        nextPageBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('🖱️ Next button clicked');
+            this.nextPage();
+        });
+
+        pageNavGroup.appendChild(prevPageBtn);
+        pageNavGroup.appendChild(nextPageBtn);
+
+        console.log('📄 Page navigation buttons created with text arrows');
 
         // Font family dropdown
         const fontSelect = document.createElement('select');
@@ -1207,7 +2033,7 @@ export default class ObsidianRPlugin extends Plugin {
         });
 
         // Create all toggles asynchronously
-        Promise.all([tocToggle, bookmarksToggle, statsToggle, zenToggle]).then(([tocEl, bookmarksEl, statsEl, zenEl]) => {
+        const panePromise = Promise.all([tocToggle, bookmarksToggle, statsToggle, zenToggle]).then(([tocEl, bookmarksEl, statsEl, zenEl]) => {
             paneGroup.appendChild(tocEl);
             paneGroup.appendChild(bookmarksEl);
             paneGroup.appendChild(statsEl);
@@ -1222,11 +2048,22 @@ export default class ObsidianRPlugin extends Plugin {
             console.log('🔄 IconManager.refreshIcons completed');
         });
 
+        // Wait for async operations to complete before assembling the bottom bar
+        await Promise.all([fontSizePromise, panePromise]);
+
+        console.log('🔧 Assembling bottom bar with all controls...');
+        console.log('📄 Page nav group children:', pageNavGroup.children.length);
+        console.log('🎨 Font size group children:', fontSizeGroup.children.length);
+        console.log('🔧 Pane group children:', paneGroup.children.length);
+
         bottomBar.appendChild(fontSizeGroup);
+        bottomBar.appendChild(pageNavGroup);
         bottomBar.appendChild(fontSelect);
         bottomBar.appendChild(paneGroup);
 
+        console.log('🔧 Bottom bar assembled, children count:', bottomBar.children.length);
         this.controlsEl.appendChild(bottomBar);
+        console.log('🔧 Bottom bar appended to controls element');
 
         console.log('Controls element created, about to append to active tab...');
         // Append controls to the active workspace leaf container
@@ -1281,9 +2118,23 @@ export default class ObsidianRPlugin extends Plugin {
             console.log('Controls appended. ControlsEl:', this.controlsEl);
             console.log('Controls element display style:', this.controlsEl?.style.display);
             console.log('Controls element classes:', this.controlsEl?.className);
+
+            // CRITICAL: Refresh all icons after controls are appended to DOM with delay
+            setTimeout(() => {
+                console.log('🔄 Refreshing all icons after controls appended to DOM (delayed)');
+                IconManager.refreshIcons(this.controlsEl!);
+                console.log('🔄 Final icon refresh completed');
+            }, 100);
         } else {
             console.log('No suitable container found, falling back to document body');
             document.body.appendChild(this.controlsEl!);
+
+            // CRITICAL: Refresh all icons after controls are appended to DOM with delay
+            setTimeout(() => {
+                console.log('🔄 Refreshing all icons after controls appended to body (delayed)');
+                IconManager.refreshIcons(this.controlsEl!);
+                console.log('🔄 Final icon refresh completed');
+            }, 100);
         }
     }
 
@@ -1462,8 +2313,9 @@ export default class ObsidianRPlugin extends Plugin {
         this.settings.fontSize = Math.max(10, Math.min(32, this.settings.fontSize + delta));
         console.log('🔧 New font size:', this.settings.fontSize);
         this.saveSettings();
-        // Use the comprehensive style application method
-        this.applyReaderModeStyles();
+
+        // Use the comprehensive refresh method for reader mode updates
+        this.refreshReaderModeIfActive();
     }
 
     /**
@@ -1473,8 +2325,9 @@ export default class ObsidianRPlugin extends Plugin {
         console.log('🔧 Changing font family to:', fontFamily);
         this.settings.fontFamily = fontFamily;
         this.saveSettings();
-        // Use the comprehensive style application method
-        this.applyReaderModeStyles();
+
+        // Use the comprehensive refresh method for reader mode updates
+        this.refreshReaderModeIfActive();
     }
 
     /**
@@ -1522,6 +2375,33 @@ export default class ObsidianRPlugin extends Plugin {
         } else {
             console.log('Right sidebar element not found');
         }
+
+        // Toggle view actions visibility
+        const viewActionsElements = document.querySelectorAll('.view-actions') as NodeListOf<HTMLElement>;
+        console.log(`Found ${viewActionsElements.length} view-actions element(s)`);
+        viewActionsElements.forEach((viewActionsEl, index) => {
+            const isHidden = viewActionsEl.style.display === 'none';
+            viewActionsEl.style.display = isHidden ? '' : 'none';
+            console.log(`View actions ${index + 1}:`, isHidden ? 'shown' : 'hidden');
+        });
+
+        // Toggle view header left visibility
+        const viewHeaderLeftElements = document.querySelectorAll('.view-header-left') as NodeListOf<HTMLElement>;
+        console.log(`Found ${viewHeaderLeftElements.length} view-header-left element(s)`);
+        viewHeaderLeftElements.forEach((viewHeaderLeftEl, index) => {
+            const isHidden = viewHeaderLeftEl.style.display === 'none';
+            viewHeaderLeftEl.style.display = isHidden ? '' : 'none';
+            console.log(`View header left ${index + 1}:`, isHidden ? 'shown' : 'hidden');
+        });
+
+        // Toggle status bar visibility
+        const statusBarElements = document.querySelectorAll('.status-bar') as NodeListOf<HTMLElement>;
+        console.log(`Found ${statusBarElements.length} status-bar element(s)`);
+        statusBarElements.forEach((statusBarEl, index) => {
+            const isHidden = statusBarEl.style.display === 'none';
+            statusBarEl.style.display = isHidden ? '' : 'none';
+            console.log(`Status bar ${index + 1}:`, isHidden ? 'shown' : 'hidden');
+        });
 
         // Toggle tab bar visibility
         console.log('Attempting to hide all tab bar containers...');
@@ -1651,6 +2531,27 @@ export default class ObsidianRPlugin extends Plugin {
             console.log('Right sidebar restored');
         }
 
+        // Show view actions
+        const viewActionsElements = document.querySelectorAll('.view-actions') as NodeListOf<HTMLElement>;
+        viewActionsElements.forEach((viewActionsEl, index) => {
+            viewActionsEl.style.display = '';
+            console.log(`View actions ${index + 1} restored`);
+        });
+
+        // Show view header left
+        const viewHeaderLeftElements = document.querySelectorAll('.view-header-left') as NodeListOf<HTMLElement>;
+        viewHeaderLeftElements.forEach((viewHeaderLeftEl, index) => {
+            viewHeaderLeftEl.style.display = '';
+            console.log(`View header left ${index + 1} restored`);
+        });
+
+        // Show status bar
+        const statusBarElements = document.querySelectorAll('.status-bar') as NodeListOf<HTMLElement>;
+        statusBarElements.forEach((statusBarEl, index) => {
+            statusBarEl.style.display = '';
+            console.log(`Status bar ${index + 1} restored`);
+        });
+
         // Show tab bar
         console.log('Restoring all tab bar containers...');
 
@@ -1685,6 +2586,46 @@ export default class ObsidianRPlugin extends Plugin {
             //     alt: e.altKey,
             //     shift: e.shiftKey
             // });
+
+            // Page navigation
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+                    console.log('Previous page key detected');
+                    e.preventDefault();
+                    this.previousPage();
+                    return;
+                }
+            }
+
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+                    console.log('Next page key detected');
+                    e.preventDefault();
+                    this.nextPage();
+                    return;
+                }
+            }
+
+            // Home/End for first/last page
+            if (e.key === 'Home') {
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+                    console.log('Home key detected - going to first page');
+                    e.preventDefault();
+                    this.readerModeState.currentPageIndex = 0;
+                    this.displayCurrentPage();
+                    return;
+                }
+            }
+
+            if (e.key === 'End') {
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+                    console.log('End key detected - going to last page');
+                    e.preventDefault();
+                    this.readerModeState.currentPageIndex = this.readerModeState.paginatedContent.length - 1;
+                    this.displayCurrentPage();
+                    return;
+                }
+            }
 
             // Test for font size keys (without modifiers)
             if (e.key === '+' || e.key === '=') {
@@ -2195,11 +3136,18 @@ export default class ObsidianRPlugin extends Plugin {
     public refreshReaderModeIfActive() {
         console.log('🔄 refreshReaderModeIfActive called - isActive:', this.readerModeState.isActive);
         if (this.readerModeState.isActive) {
-            console.log('🔄 Settings changed while in reader mode, refreshing styles...');
+            console.log('🔄 Settings changed while in reader mode, refreshing styles and pagination...');
             this.applyReaderModeStyles();
 
-            // Also recalculate pagination if it affects layout
-            this.calculatePageNumbers();
+            // Re-paginate content since layout may have changed
+            if (this.readerModeState.isPaginated) {
+                setTimeout(() => {
+                    this.safePaginateContent();
+                    this.calculatePageNumbers();
+                    this.displayCurrentPage();
+                }, 100);
+            }
+
             this.updatePills();
             console.log('🔄 Reader mode refresh completed');
         } else {
@@ -2336,12 +3284,13 @@ class ObsidianRSettingTab extends PluginSettingTab {
             .setName('Transition Type')
             .setDesc('Choose the page transition animation for reader mode')
             .addDropdown(dropdown => dropdown
+                .addOption('none', 'None')
                 .addOption('page-curl', 'Page Curl')
                 .addOption('slide', 'Slide')
                 .addOption('fade', 'Fade')
                 .addOption('scroll', 'Scroll')
                 .setValue(this.plugin.settings.transitionType)
-                .onChange(async (value: 'page-curl' | 'slide' | 'fade' | 'scroll') => {
+                .onChange(async (value: 'none' | 'page-curl' | 'slide' | 'fade' | 'scroll') => {
                     this.plugin.settings.transitionType = value;
                     await this.plugin.saveSettings();
                     this.plugin.refreshReaderModeIfActive();
