@@ -166,23 +166,23 @@
 .obsidian-r-bottom-bar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     padding: var(--size-4-3) var(--size-4-4);
-    gap: var(--size-4-3);
+    gap: var(--size-4-4); /* Consistent gap between groups */
 }
 
 /* Font size controls */
 .obsidian-r-font-size-group {
     display: flex;
-    gap: var(--size-4-1);
+    gap: var(--size-4-1); /* Small gap within group */
     align-items: center;
 }
 
-.obsidian-r-font-size-group button {
-    background: var(--interactive-normal);
-    border: 1px solid var(--background-modifier-border);
+.obsidian-r-font-size-group .obsidian-r-icon-button {
+    background: var(--interactive-normal) !important;
+    border: 1px solid var(--background-modifier-border) !important;
     border-radius: var(--radius-s);
-    padding: var(--size-4-1) var(--size-4-2);
+    padding: var(--size-4-1) var(--size-4-2) !important;
     color: var(--text-normal);
     cursor: pointer;
     font-size: var(--font-ui-small);
@@ -195,29 +195,27 @@
     transition: all 0.2s var(--anim-motion-smooth);
 }
 
-.obsidian-r-font-size-group button:hover {
-    background: var(--interactive-hover);
+.obsidian-r-font-size-group .obsidian-r-icon-button:hover {
+    background: var(--interactive-hover) !important;
     border-color: var(--background-modifier-border-hover);
 }
 
-.obsidian-r-font-size-group button:active {
-    background: var(--interactive-active);
+.obsidian-r-font-size-group .obsidian-r-icon-button:active {
+    background: var(--interactive-active) !important;
 }
 
 /* Page navigation controls */
 .obsidian-r-page-nav-group {
     display: flex;
-    gap: var(--size-4-1);
+    gap: var(--size-4-1); /* Small gap within group */
     align-items: center;
-    margin-left: var(--size-4-2);
-    margin-right: var(--size-4-2);
 }
 
-.obsidian-r-page-nav-group button {
-    background: var(--interactive-normal);
-    border: 1px solid var(--background-modifier-border);
+.obsidian-r-page-nav-group .obsidian-r-icon-button {
+    background: var(--interactive-normal) !important;
+    border: 1px solid var(--background-modifier-border) !important;
     border-radius: var(--radius-s);
-    padding: var(--size-4-1) var(--size-4-2);
+    padding: var(--size-4-1) var(--size-4-2) !important;
     color: var(--text-normal);
     cursor: pointer;
     font-size: var(--font-ui-small);
@@ -230,13 +228,19 @@
     transition: all 0.2s var(--anim-motion-smooth);
 }
 
-.obsidian-r-page-nav-group button:hover {
-    background: var(--interactive-hover);
+.obsidian-r-page-nav-group .obsidian-r-icon-button:hover {
+    background: var(--interactive-hover) !important;
     border-color: var(--background-modifier-border-hover);
 }
 
-.obsidian-r-page-nav-group button:active {
-    background: var(--interactive-active);
+.obsidian-r-page-nav-group .obsidian-r-icon-button:active {
+    background: var(--interactive-active) !important;
+}
+
+/* Font family dropdown group */
+.obsidian-r-font-group {
+    display: flex;
+    align-items: center;
 }
 
 /* Font family dropdown */
@@ -267,8 +271,13 @@
 /* Pane toggles group */
 .obsidian-r-pane-group {
     display: flex;
-    gap: var(--size-4-2);
+    gap: var(--size-4-1); /* Small gap within group - consistent with other groups */
     align-items: center;
+}
+
+/* Zen toggle gets extra spacing to separate it as its own group */
+.obsidian-r-zen-toggle {
+    margin-left: calc(var(--size-4-4) - var(--size-4-1)) !important; /* Extra space to match group separation */
 }
 
 /* Toggle button styling (Obsidian-like) */

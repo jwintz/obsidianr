@@ -884,6 +884,17 @@ export default class ObsidianRPlugin extends Plugin {
             activeLeaf.view.containerEl.classList.add('obsidian-r-active');
         }
 
+        // Hide view actions and view header left for cleaner reader experience
+        const viewActionsElements = document.querySelectorAll('.view-actions') as NodeListOf<HTMLElement>;
+        viewActionsElements.forEach((viewActionsEl) => {
+            viewActionsEl.style.display = 'none';
+        });
+
+        const viewHeaderLeftElements = document.querySelectorAll('.view-header-left') as NodeListOf<HTMLElement>;
+        viewHeaderLeftElements.forEach((viewHeaderLeftEl) => {
+            viewHeaderLeftEl.style.display = 'none';
+        });
+
         const css = `
             /* Reader mode typography and layout styles */
             .obsidian-r-active .markdown-preview-sizer,
@@ -1039,6 +1050,17 @@ export default class ObsidianRPlugin extends Plugin {
         if (activeLeaf?.view?.containerEl) {
             activeLeaf.view.containerEl.classList.remove('obsidian-r-active');
         }
+
+        // Restore view actions and view header left
+        const viewActionsElements = document.querySelectorAll('.view-actions') as NodeListOf<HTMLElement>;
+        viewActionsElements.forEach((viewActionsEl) => {
+            viewActionsEl.style.display = '';
+        });
+
+        const viewHeaderLeftElements = document.querySelectorAll('.view-header-left') as NodeListOf<HTMLElement>;
+        viewHeaderLeftElements.forEach((viewHeaderLeftEl) => {
+            viewHeaderLeftEl.style.display = '';
+        });
     }
 
     /**
@@ -1295,6 +1317,11 @@ export default class ObsidianRPlugin extends Plugin {
         this.controlsEl = document.createElement('div');
         this.controlsEl.className = 'obsidian-r-controls';
 
+        // Prevent clicks on controls from bubbling up to document
+        this.controlsEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+
         // Add mouse enter/leave handlers for hover behavior
         this.controlsEl.addEventListener('mouseenter', () => {
             this.cancelControlsHide();
@@ -1326,12 +1353,6 @@ export default class ObsidianRPlugin extends Plugin {
         // Page navigation controls
         const pageNavGroup = document.createElement('div');
         pageNavGroup.className = 'obsidian-r-page-nav-group';
-        pageNavGroup.style.cssText = `
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            margin: 0 12px;
-        `;
 
         // Create navigation buttons with proper icons
         const pageNavPromise = Promise.all([
@@ -1346,6 +1367,9 @@ export default class ObsidianRPlugin extends Plugin {
 
 
         // Font family dropdown
+        const fontGroup = document.createElement('div');
+        fontGroup.className = 'obsidian-r-font-group';
+
         const fontSelect = document.createElement('select');
         fontSelect.className = 'obsidian-r-font-select';
         const fonts = FontManager.getFonts();
@@ -1361,6 +1385,8 @@ export default class ObsidianRPlugin extends Plugin {
             const target = e.target as HTMLSelectElement;
             this.changeFontFamily(target.value);
         });
+
+        fontGroup.appendChild(fontSelect);
 
         // Pane toggles
         const paneGroup = document.createElement('div');
@@ -1417,6 +1443,9 @@ export default class ObsidianRPlugin extends Plugin {
             paneGroup.appendChild(tocEl);
             paneGroup.appendChild(bookmarksEl);
             paneGroup.appendChild(statsEl);
+
+            // Add special class to zen toggle for separate spacing
+            zenEl.classList.add('obsidian-r-zen-toggle');
             paneGroup.appendChild(zenEl);
 
             // CRITICAL: Update zen icon data-lucide attribute BEFORE refresh
@@ -1432,7 +1461,7 @@ export default class ObsidianRPlugin extends Plugin {
 
         bottomBar.appendChild(fontSizeGroup);
         bottomBar.appendChild(pageNavGroup);
-        bottomBar.appendChild(fontSelect);
+        bottomBar.appendChild(fontGroup);
         bottomBar.appendChild(paneGroup);
 
         this.controlsEl.appendChild(bottomBar);
@@ -1549,7 +1578,6 @@ export default class ObsidianRPlugin extends Plugin {
      * Shows reader controls and auto-hide after 3 seconds
      */
     private showReaderControls() {
-        console.trace('showReaderControls() call stack');
         if (!this.controlsEl) {
             return;
         }
@@ -1672,20 +1700,6 @@ export default class ObsidianRPlugin extends Plugin {
         } else {
         }
 
-        // Toggle view actions visibility
-        const viewActionsElements = document.querySelectorAll('.view-actions') as NodeListOf<HTMLElement>;
-        viewActionsElements.forEach((viewActionsEl, index) => {
-            const isHidden = viewActionsEl.style.display === 'none';
-            viewActionsEl.style.display = isHidden ? '' : 'none';
-        });
-
-        // Toggle view header left visibility
-        const viewHeaderLeftElements = document.querySelectorAll('.view-header-left') as NodeListOf<HTMLElement>;
-        viewHeaderLeftElements.forEach((viewHeaderLeftEl, index) => {
-            const isHidden = viewHeaderLeftEl.style.display === 'none';
-            viewHeaderLeftEl.style.display = isHidden ? '' : 'none';
-        });
-
         // Toggle status bar visibility
         const statusBarElements = document.querySelectorAll('.status-bar') as NodeListOf<HTMLElement>;
         statusBarElements.forEach((statusBarEl, index) => {
@@ -1797,18 +1811,6 @@ export default class ObsidianRPlugin extends Plugin {
         if (rightSidebarEl) {
             rightSidebarEl.style.display = '';
         }
-
-        // Show view actions
-        const viewActionsElements = document.querySelectorAll('.view-actions') as NodeListOf<HTMLElement>;
-        viewActionsElements.forEach((viewActionsEl, index) => {
-            viewActionsEl.style.display = '';
-        });
-
-        // Show view header left
-        const viewHeaderLeftElements = document.querySelectorAll('.view-header-left') as NodeListOf<HTMLElement>;
-        viewHeaderLeftElements.forEach((viewHeaderLeftEl, index) => {
-            viewHeaderLeftEl.style.display = '';
-        });
 
         // Show status bar
         const statusBarElements = document.querySelectorAll('.status-bar') as NodeListOf<HTMLElement>;
@@ -1966,11 +1968,22 @@ export default class ObsidianRPlugin extends Plugin {
         // Check if the new file is part of the current book
         const book = this.findBookForFile(activeFile);
         if (book === this.readerModeState.currentBook) {
-            // Update current chapter
+            // Update current chapter and refresh reader mode UI
             this.readerModeState.currentChapter = activeFile;
+            // Refresh reader mode UI for the new chapter
+            this.refreshReaderModeIfActive();
         } else {
-            // File is not part of current book, exit reader mode
-            this.exitReaderMode();
+            // File is not part of current book - check if it's part of any book
+            const newBook = this.findBookForFile(activeFile);
+            if (newBook) {
+                // File is part of a different book - switch to new book's reader mode
+                this.readerModeState.currentBook = newBook;
+                this.readerModeState.currentChapter = activeFile;
+                this.refreshReaderModeIfActive();
+            } else {
+                // File is not part of any book - remove reader mode from current tab only
+                this.exitReaderMode();
+            }
         }
     }
 
@@ -2010,14 +2023,29 @@ export default class ObsidianRPlugin extends Plugin {
         if (this.readerModeState.isActive) {
             this.applyReaderModeStyles();
 
+            // Only recreate controls if they don't exist
+            // Don't destroy existing controls just to refresh settings
+            if (!this.controlsEl) {
+                this.createReaderControls();
+            }
+
+        } else {
+        }
+    }
+
+    /**
+     * Forces recreation of reader controls (used when settings change from outside)
+     */
+    public recreateReaderControlsIfActive() {
+        if (this.readerModeState.isActive) {
+            this.applyReaderModeStyles();
+
             // Recreate controls to reflect updated settings
             if (this.controlsEl) {
                 this.controlsEl.remove();
                 this.controlsEl = null;
                 this.createReaderControls();
             }
-
-        } else {
         }
     }
 
