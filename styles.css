@@ -187,7 +187,7 @@
     cursor: pointer;
     font-size: var(--font-ui-small);
     font-weight: var(--font-weight-medium);
-    min-width: 32px;
+    min-width: 36px;
     height: 32px;
     display: flex;
     align-items: center;
@@ -214,11 +214,11 @@
 }
 
 .obsidian-r-page-nav-group button {
-    background: var(--interactive-accent);
-    border: 1px solid var(--accent-color);
+    background: var(--interactive-normal);
+    border: 1px solid var(--background-modifier-border);
     border-radius: var(--radius-s);
     padding: var(--size-4-1) var(--size-4-2);
-    color: var(--text-on-accent);
+    color: var(--text-normal);
     cursor: pointer;
     font-size: var(--font-ui-small);
     font-weight: var(--font-weight-medium);
@@ -231,12 +231,12 @@
 }
 
 .obsidian-r-page-nav-group button:hover {
-    background: var(--interactive-accent-hover);
-    border-color: var(--accent-color-hover);
+    background: var(--interactive-hover);
+    border-color: var(--background-modifier-border-hover);
 }
 
 .obsidian-r-page-nav-group button:active {
-    background: var(--interactive-accent-active);
+    background: var(--interactive-active);
 }
 
 /* Font family dropdown */

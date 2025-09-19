@@ -6,6 +6,7 @@ import { Plugin, TFile, TFolder, TAbstractFile, PluginSettingTab, App, Setting, 
 
 type LucideIconName =
     | 'a-arrow-down' | 'a-arrow-up'    // Font size controls
+    | 'chevron-left' | 'chevron-right' // Navigation controls
     | 'list' | 'bookmark' | 'bar-chart-3' // Pane toggles  
     | 'eye' | 'eye-off';                // Zen mode toggle
 
@@ -222,7 +223,6 @@ class IconManager {
 
             await new Promise<void>((resolve, reject) => {
                 script.onload = () => {
-                    console.log('Lucide loaded successfully from CDN');
                     this.lucideLoaded = true;
                     resolve();
                 };
@@ -298,7 +298,10 @@ class IconManager {
         const icon = await this.createIcon(iconName, 'obsidian-r-icon');
         button.appendChild(icon);
 
-        button.addEventListener('click', onClick);
+        button.addEventListener('click', (e) => {
+            e.stopPropagation();
+            onClick();
+        });
         return button;
     }
 
@@ -401,16 +404,13 @@ export default class ObsidianRPlugin extends Plugin {
             id: 'toggle-reader-mode',
             name: 'Toggle Reader Mode',
             callback: () => {
-                console.log('Toggle Reader Mode command triggered via Command Palette');
                 this.toggleReaderMode();
             },
             hotkeys: []
         });
 
         // Initial scan for books
-        console.log('Starting initial book scan...');
         await this.scanForBooks();
-        console.log('Initial book scan completed. Found books:', this.detectedBooks.size);
 
         // Listen for file/folder changes with debouncing
         this.registerEvent(
@@ -452,7 +452,6 @@ export default class ObsidianRPlugin extends Plugin {
     }
 
     onunload() {
-        console.log('Unloading Obsidian:R plugin');
         // Clear any pending timeouts
         if (this.scanTimeoutId) {
             clearTimeout(this.scanTimeoutId);
@@ -543,9 +542,6 @@ export default class ObsidianRPlugin extends Plugin {
                 this.detectedBooks.set(folder.path, bookStructure);
             }
         }
-
-        console.log(`Detected ${this.detectedBooks.size} books:`,
-            Array.from(this.detectedBooks.keys()));
     }
 
     /**
@@ -578,8 +574,8 @@ export default class ObsidianRPlugin extends Plugin {
         const chapterPatterns = [
             // Standard: [Title] - Chapter X.md
             new RegExp(`^${this.escapeRegex(folderName)} - (Chapter \\d+|Epilogue|Prologue)$`),
-            // Alternative: [Title] - Chapitre X.md (French)
-            new RegExp(`^${this.escapeRegex(folderName)} - (Chapitre \\d+|Épilogue|Prologue)$`),
+            // French: [Title] - Chapitre X.md
+            new RegExp(`^${this.escapeRegex(folderName)} - (Chapitre \\d+|Épilogue|Prologue|Préambule|Avant-propos|Postface)$`),
             // Part-based: [Title] - Part X - Chapter Y.md
             new RegExp(`^${this.escapeRegex(folderName)} - Part \\d+ - .+$`),
             // Direct numbering: [Title] - X.md
@@ -627,28 +623,45 @@ export default class ObsidianRPlugin extends Plugin {
             const aBasename = a.basename;
             const bBasename = b.basename;
 
+            // Check for prologue (case insensitive, multi-language)
+            const aIsPrologue = /prologue|préambule|avant-propos/i.test(aBasename);
+            const bIsPrologue = /prologue|préambule|avant-propos/i.test(bBasename);
+
             // Prologue comes first
-            if (aBasename.includes('Prologue')) return -1;
-            if (bBasename.includes('Prologue')) return 1;
+            if (aIsPrologue && !bIsPrologue) return -1;
+            if (!aIsPrologue && bIsPrologue) return 1;
+
+            // Check for epilogue (case insensitive, multi-language)
+            const aIsEpilogue = /epilogue|épilogue|postface/i.test(aBasename);
+            const bIsEpilogue = /epilogue|épilogue|postface/i.test(bBasename);
 
             // Epilogue comes last
-            if (aBasename.includes('Epilogue')) return 1;
-            if (bBasename.includes('Epilogue')) return -1;
+            if (aIsEpilogue && !bIsEpilogue) return 1;
+            if (!aIsEpilogue && bIsEpilogue) return -1;
 
-            // Extract chapter numbers for regular chapters
-            const aMatch = aBasename.match(/Chapter (\d+)/);
-            const bMatch = bBasename.match(/Chapter (\d+)/);
+            // Notes/appendix come after chapters but before epilogue
+            const aIsNote = /notes?|appendix|index|glossary|bibliography/i.test(aBasename);
+            const bIsNote = /notes?|appendix|index|glossary|bibliography/i.test(bBasename);
+
+            if (aIsNote && !bIsNote) return 1;  // a (note) comes after b (chapter)
+            if (!aIsNote && bIsNote) return -1; // a (chapter) comes before b (note)
+
+            // Extract chapter numbers for regular chapters (case insensitive)
+            const aMatch = aBasename.match(/chapter\s+(\d+)/i) || aBasename.match(/chapitre\s+(\d+)/i);
+            const bMatch = bBasename.match(/chapter\s+(\d+)/i) || bBasename.match(/chapitre\s+(\d+)/i);
 
             if (aMatch && bMatch) {
                 return parseInt(aMatch[1]) - parseInt(bMatch[1]);
             }
 
+            // If one is a chapter and the other isn't, chapter comes first (unless it's a note)
+            if (aMatch && !bMatch && !bIsNote && !bIsPrologue && !bIsEpilogue) return -1;
+            if (!aMatch && bMatch && !aIsNote && !aIsPrologue && !aIsEpilogue) return 1;
+
             // Fallback to alphabetical
             return aBasename.localeCompare(bBasename);
         });
-    }
-
-    /**
+    }    /**
      * Escapes special regex characters in a string
      */
     private escapeRegex(string: string): string {
@@ -666,7 +679,6 @@ export default class ObsidianRPlugin extends Plugin {
 
                 // Also refresh reader mode if active
                 if (this.readerModeState.isActive) {
-                    console.log('📏 Layout changed - refreshing reader mode');
                     setTimeout(() => {
                         this.refreshReaderModeIfActive();
                     }, 300);
@@ -702,7 +714,6 @@ export default class ObsidianRPlugin extends Plugin {
             Array.from(this.detectedBooks.keys()).map(path => path.split('/').pop()).filter(Boolean)
         );
 
-        console.log('Updating file explorer decorations. Detected books:', Array.from(bookFolderNames));
 
         // Use requestAnimationFrame to avoid forced reflows during execution
         requestAnimationFrame(() => {
@@ -711,7 +722,6 @@ export default class ObsidianRPlugin extends Plugin {
 
             // Find all nav-folder elements with more patience
             const folderElements = document.querySelectorAll('.nav-folder');
-            console.log('Found folder elements:', folderElements.length);
 
             folderElements.forEach((folderElement) => {
                 const titleElement = folderElement.querySelector('.nav-folder-title-content');
@@ -722,7 +732,6 @@ export default class ObsidianRPlugin extends Plugin {
 
                 // Check if this folder name matches any detected book folder
                 const isBook = bookFolderNames.has(folderName);
-                console.log(`Folder "${folderName}": isBook=${isBook}`);
 
                 if (isBook) {
                     this.addBookPill(folderElement as HTMLElement);
@@ -790,11 +799,9 @@ export default class ObsidianRPlugin extends Plugin {
      * Enters reader mode for the current book
      */
     async enterReaderMode() {
-        console.log('Entering reader mode...');
 
         const activeFile = this.app.workspace.getActiveFile();
         if (!activeFile) {
-            console.log('No active file found');
             new Notice('No file is currently open');
             return;
         }
@@ -823,7 +830,6 @@ export default class ObsidianRPlugin extends Plugin {
         // Add reader mode keyboard handlers
         this.addReaderModeKeyboardHandlers();
 
-        console.log('Reader mode UI created and controls shown');
         new Notice('Reader mode activated');
     }
 
@@ -836,13 +842,10 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Store the original view mode
         this.originalViewMode = activeMarkdownView.getMode() as 'source' | 'preview';
-        console.log('📖 Storing original view mode:', this.originalViewMode);
 
         // Switch to preview mode if not already
         if (this.originalViewMode !== 'preview') {
-            console.log('📖 Switching to reading view...');
             await activeMarkdownView.setState({ mode: 'preview' }, { history: false });
-            console.log('📖 Switched to reading view');
         }
     }
 
@@ -855,17 +858,14 @@ export default class ObsidianRPlugin extends Plugin {
         const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!activeMarkdownView) return;
 
-        console.log('📖 Restoring original view mode:', this.originalViewMode);
         await activeMarkdownView.setState({ mode: this.originalViewMode }, { history: false });
         this.originalViewMode = null;
-        console.log('📖 Original view mode restored');
     }
 
     /**
      * Applies reader mode visual styling to the content area
      */
     private applyReaderModeStyles() {
-        console.log('🎨 Applying reader mode styles to content area...');
 
         // Create or update the style element
         let styleEl = document.getElementById('obsidian-r-reader-styles') as HTMLStyleElement;
@@ -878,23 +878,10 @@ export default class ObsidianRPlugin extends Plugin {
         const horizontalMarginPx = (window.innerWidth * this.settings.horizontalMargins) / 100;
         const contentWidth = window.innerWidth - (horizontalMarginPx * 2);
 
-        console.log('🎨 Style calculations:', {
-            windowWidth: window.innerWidth,
-            marginPercent: this.settings.horizontalMargins,
-            horizontalMarginPx,
-            contentWidth,
-            fontSize: this.settings.fontSize,
-            fontFamily: this.settings.fontFamily,
-            lineSpacing: this.settings.lineSpacing,
-            characterSpacing: this.settings.characterSpacing,
-            wordSpacing: this.settings.wordSpacing
-        });
-
         // Apply styles to current view mode and add class for identification
         const activeLeaf = this.app.workspace.activeLeaf;
         if (activeLeaf?.view?.containerEl) {
             activeLeaf.view.containerEl.classList.add('obsidian-r-active');
-            console.log('🎨 Added obsidian-r-active class to active view container');
         }
 
         const css = `
@@ -969,6 +956,14 @@ export default class ObsidianRPlugin extends Plugin {
             .workspace-leaf-content.has-obsidian-r-controls .markdown-preview-view {
                 width: 100% !important;
                 max-width: none !important;
+                padding: 0 !important; /* Reset padding for accurate margin computation */
+            }
+
+            /* Reset padding on rendered content containers */
+            .obsidian-r-active .markdown-preview-view .markdown-rendered,
+            .workspace-leaf.has-obsidian-r-controls .markdown-preview-view .markdown-rendered,
+            .workspace-leaf-content.has-obsidian-r-controls .markdown-preview-view .markdown-rendered {
+                padding: 0 !important; /* Reset padding for accurate margin computation */
             }
 
             /* Hide frontmatter in reader mode */
@@ -988,6 +983,19 @@ export default class ObsidianRPlugin extends Plugin {
             .workspace-leaf-content.has-obsidian-r-controls .nav-header,
             .workspace-leaf-content.has-obsidian-r-controls .backlink-pane,
             .workspace-leaf-content.has-obsidian-r-controls .mod-footer {
+                display: none !important;
+            }
+
+            /* Hide heading collapse indicators in reader mode - only for active tab */
+            .workspace-leaf.mod-active .obsidian-r-active .heading-collapse-indicator,
+            .workspace-leaf.mod-active .obsidian-r-active .collapse-indicator,
+            .workspace-leaf.mod-active .obsidian-r-active .collapse-icon,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .heading-collapse-indicator,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .collapse-indicator,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .collapse-icon,
+            .workspace-leaf-content.mod-active.has-obsidian-r-controls .heading-collapse-indicator,
+            .workspace-leaf-content.mod-active.has-obsidian-r-controls .collapse-indicator,
+            .workspace-leaf-content.mod-active.has-obsidian-r-controls .collapse-icon {
                 display: none !important;
             }
 
@@ -1015,31 +1023,21 @@ export default class ObsidianRPlugin extends Plugin {
         `;
 
         styleEl.textContent = css;
-        console.log('🎨 Reader mode styles applied:', {
-            fontSize: this.settings.fontSize,
-            fontFamily: this.settings.fontFamily,
-            columns: this.settings.columns,
-            contentWidth: contentWidth,
-            margins: horizontalMarginPx
-        });
     }
 
     /**
      * Removes reader mode visual styling
      */
     private removeReaderModeStyles() {
-        console.log('🎨 Removing reader mode styles...');
         const styleEl = document.getElementById('obsidian-r-reader-styles');
         if (styleEl) {
             styleEl.remove();
-            console.log('🎨 Reader mode styles removed');
         }
 
         // Remove active class from view container
         const activeLeaf = this.app.workspace.activeLeaf;
         if (activeLeaf?.view?.containerEl) {
             activeLeaf.view.containerEl.classList.remove('obsidian-r-active');
-            console.log('🎨 Removed obsidian-r-active class from view container');
         }
     }
 
@@ -1048,7 +1046,6 @@ export default class ObsidianRPlugin extends Plugin {
      */
     private updatePageNavigation() {
         // For now, just enable the buttons for chapter navigation
-        console.log('📄 Page navigation updated for chapter-level navigation');
     }
 
     /**
@@ -1057,13 +1054,10 @@ export default class ObsidianRPlugin extends Plugin {
     private applyPageTransition(contentEl: HTMLElement, newContent: string, isInitialLoad: boolean = false) {
         const transitionType = this.settings.transitionType;
 
-        console.log('🎬 Applying transition:', transitionType, 'to content length:', newContent.length);
 
         // Skip animation for initial load - just update content directly
         if (isInitialLoad) {
-            console.log('🎬 Initial load - updating content directly without animation');
             contentEl.innerHTML = newContent;
-            console.log('🎬 Content updated, new innerHTML length:', contentEl.innerHTML.length);
 
             // Force a repaint to ensure content is visible
             contentEl.style.display = 'none';
@@ -1078,9 +1072,7 @@ export default class ObsidianRPlugin extends Plugin {
         switch (transitionType) {
             case 'none':
                 // No transition, just update content immediately
-                console.log('🎬 No transition - updating content directly');
                 contentEl.innerHTML = newContent;
-                console.log('🎬 Content updated, new innerHTML length:', contentEl.innerHTML.length);
 
                 // Force a repaint to ensure content is visible
                 contentEl.style.display = 'none';
@@ -1101,9 +1093,7 @@ export default class ObsidianRPlugin extends Plugin {
                 break;
             default:
                 // No transition, just update content immediately
-                console.log('🎬 No transition - updating content directly');
                 contentEl.innerHTML = newContent;
-                console.log('🎬 Content updated, new innerHTML length:', contentEl.innerHTML.length);
 
                 // Force a repaint to ensure content is visible
                 contentEl.style.display = 'none';
@@ -1221,9 +1211,7 @@ export default class ObsidianRPlugin extends Plugin {
      * Exits reader mode
      */
     async exitReaderMode() {
-        console.log('Exiting reader mode...');
         if (!this.readerModeState.isActive) {
-            console.log('Reader mode not active, nothing to exit');
             return;
         }
 
@@ -1234,7 +1222,6 @@ export default class ObsidianRPlugin extends Plugin {
         // Clear content backup
         this.originalContentBackup = null;
 
-        console.log('Reader mode state cleared');
 
         // Restore UI elements if zen mode was enabled
         if (this.zenMode) {
@@ -1253,7 +1240,6 @@ export default class ObsidianRPlugin extends Plugin {
         // Clean up UI
         this.destroyReaderModeUI();
 
-        console.log('Reader mode UI destroyed');
         new Notice('Reader mode deactivated');
     }
 
@@ -1275,7 +1261,6 @@ export default class ObsidianRPlugin extends Plugin {
     private async createReaderModeUI() {
         if (this.readerModeEl) return;
 
-        console.log('Creating reader mode UI without blocking overlay...');
 
         // Create a container just for reference, but don't add it to DOM
         this.readerModeEl = document.createElement('div');
@@ -1297,20 +1282,16 @@ export default class ObsidianRPlugin extends Plugin {
         // Create controls overlay
         await this.createReaderControls();
 
-        console.log('Reader mode UI created - sidebars should remain visible');
     }
 
     /**
      * Creates the reader controls overlay
      */
     private async createReaderControls() {
-        console.log('createReaderControls() called');
         if (this.controlsEl) {
-            console.log('Controls element already exists, returning early');
             return;
         }
 
-        console.log('Creating new controls element...');
         this.controlsEl = document.createElement('div');
         this.controlsEl.className = 'obsidian-r-controls';
 
@@ -1342,7 +1323,7 @@ export default class ObsidianRPlugin extends Plugin {
             IconManager.refreshIcons(fontSizeGroup);
         });
 
-        // Page navigation controls - simplified to avoid async issues
+        // Page navigation controls
         const pageNavGroup = document.createElement('div');
         pageNavGroup.className = 'obsidian-r-page-nav-group';
         pageNavGroup.style.cssText = `
@@ -1352,57 +1333,17 @@ export default class ObsidianRPlugin extends Plugin {
             margin: 0 12px;
         `;
 
-        // Create simple text buttons for now to test
-        const prevPageBtn = document.createElement('button');
-        prevPageBtn.textContent = '←';
-        prevPageBtn.title = 'Previous chapter';
-        prevPageBtn.className = 'obsidian-r-nav-button';
-        prevPageBtn.style.cssText = `
-            background: var(--interactive-accent);
-            border: 1px solid var(--accent-color);
-            border-radius: var(--radius-s);
-            padding: 6px 12px;
-            color: var(--text-on-accent);
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: bold;
-            min-width: 36px;
-            height: 32px;
-        `;
-        prevPageBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('🖱️ Previous button clicked');
-            // Chapter navigation could be implemented here
+        // Create navigation buttons with proper icons
+        const pageNavPromise = Promise.all([
+            IconManager.createIconButton('chevron-left', 'Previous chapter', () => this.previousChapter()),
+            IconManager.createIconButton('chevron-right', 'Next chapter', () => this.nextChapter())
+        ]).then(([prevBtn, nextBtn]) => {
+            pageNavGroup.appendChild(prevBtn);
+            pageNavGroup.appendChild(nextBtn);
+            // Refresh icons after DOM insertion for mobile compatibility
+            IconManager.refreshIcons(pageNavGroup);
         });
 
-        const nextPageBtn = document.createElement('button');
-        nextPageBtn.textContent = '→';
-        nextPageBtn.title = 'Next chapter';
-        nextPageBtn.className = 'obsidian-r-nav-button';
-        nextPageBtn.style.cssText = `
-            background: var(--interactive-accent);
-            border: 1px solid var(--accent-color);
-            border-radius: var(--radius-s);
-            padding: 6px 12px;
-            color: var(--text-on-accent);
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: bold;
-            min-width: 36px;
-            height: 32px;
-        `;
-        nextPageBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('🖱️ Next button clicked');
-            // Chapter navigation could be implemented here
-        });
-
-        pageNavGroup.appendChild(prevPageBtn);
-        pageNavGroup.appendChild(nextPageBtn);
-
-        console.log('📄 Page navigation buttons created with text arrows');
 
         // Font family dropdown
         const fontSelect = document.createElement('select');
@@ -1416,6 +1357,7 @@ export default class ObsidianRPlugin extends Plugin {
             fontSelect.appendChild(option);
         });
         fontSelect.addEventListener('change', (e) => {
+            e.stopPropagation(); // Prevent event from bubbling up
             const target = e.target as HTMLSelectElement;
             this.changeFontFamily(target.value);
         });
@@ -1440,16 +1382,12 @@ export default class ObsidianRPlugin extends Plugin {
         });
 
         const zenToggle = this.createPaneToggle('Zen', this.zenMode ? 'eye-off' : 'eye', this.zenMode, (checked: boolean) => {
-            console.log('Zen toggle clicked, new state will be:', checked);
             this.zenMode = checked;
             this.toggleZenMode();
             this.saveSettings();
         }, async (toggleButton: HTMLElement, checked: boolean) => {
             // Update zen mode icon based on state
             const newIconName = checked ? 'eye-off' : 'eye';
-            console.log('ICON CALLBACK TRIGGERED - Updating zen icon to:', newIconName, 'for checked state:', checked);
-            console.log('Button classes before update:', toggleButton.className);
-            console.log('Button active state:', toggleButton.classList.contains('active'));
 
             try {
                 // Find the icon element within the toggle button
@@ -1459,8 +1397,6 @@ export default class ObsidianRPlugin extends Plugin {
                     return;
                 }
 
-                console.log('Current icon data-lucide attribute:', iconEl.getAttribute('data-lucide'));
-                console.log('Found icon element, updating with complete replacement...');
 
                 // CRITICAL: Update the data-lucide attribute FIRST
                 iconEl.setAttribute('data-lucide', newIconName);
@@ -1471,8 +1407,6 @@ export default class ObsidianRPlugin extends Plugin {
                 // Replace the entire icon element
                 iconEl.parentNode?.replaceChild(newIcon, iconEl);
 
-                console.log('Icon element completely replaced with:', newIconName);
-                console.log('New icon data-lucide attribute:', newIcon.getAttribute('data-lucide'));
             } catch (error) {
                 console.error('Failed to update zen icon:', error);
             }
@@ -1489,29 +1423,20 @@ export default class ObsidianRPlugin extends Plugin {
             this.updateZenIconAttribute(zenEl);
 
             // Refresh icons after DOM insertion for mobile compatibility
-            console.log('🔄 Calling IconManager.refreshIcons on paneGroup');
             IconManager.refreshIcons(paneGroup);
-            console.log('🔄 IconManager.refreshIcons completed');
         });
 
         // Wait for async operations to complete before assembling the bottom bar
-        await Promise.all([fontSizePromise, panePromise]);
+        await Promise.all([fontSizePromise, pageNavPromise, panePromise]);
 
-        console.log('🔧 Assembling bottom bar with all controls...');
-        console.log('📄 Page nav group children:', pageNavGroup.children.length);
-        console.log('🎨 Font size group children:', fontSizeGroup.children.length);
-        console.log('🔧 Pane group children:', paneGroup.children.length);
 
         bottomBar.appendChild(fontSizeGroup);
         bottomBar.appendChild(pageNavGroup);
         bottomBar.appendChild(fontSelect);
         bottomBar.appendChild(paneGroup);
 
-        console.log('🔧 Bottom bar assembled, children count:', bottomBar.children.length);
         this.controlsEl.appendChild(bottomBar);
-        console.log('🔧 Bottom bar appended to controls element');
 
-        console.log('Controls element created, about to append to active tab...');
         // Append controls to the active workspace leaf container
         this.appendControlsToActiveTab();
     }
@@ -1522,8 +1447,6 @@ export default class ObsidianRPlugin extends Plugin {
     private appendControlsToActiveTab() {
         const workspaceLeaf = this.app.workspace.activeLeaf;
 
-        console.log('Active leaf:', workspaceLeaf);
-        console.log('Leaf view:', workspaceLeaf?.view);
 
         // Try different approaches to find the right container
         let targetContainer: HTMLElement | null = null;
@@ -1531,7 +1454,6 @@ export default class ObsidianRPlugin extends Plugin {
         // Approach 1: Try the workspace leaf view container
         if (workspaceLeaf?.view?.containerEl) {
             targetContainer = workspaceLeaf.view.containerEl;
-            console.log('Using view containerEl:', targetContainer);
         }
 
         // Approach 2: Try finding the active tab container by class
@@ -1539,7 +1461,6 @@ export default class ObsidianRPlugin extends Plugin {
             const activeTabContainer = document.querySelector('.workspace-tabs.mod-active .workspace-tab-container') as HTMLElement;
             if (activeTabContainer) {
                 targetContainer = activeTabContainer;
-                console.log('Using active tab container:', targetContainer);
             }
         }
 
@@ -1548,38 +1469,26 @@ export default class ObsidianRPlugin extends Plugin {
             const leafContent = document.querySelector('.workspace-leaf.mod-active .workspace-leaf-content') as HTMLElement;
             if (leafContent) {
                 targetContainer = leafContent;
-                console.log('Using leaf content:', targetContainer);
             }
         }
 
         if (targetContainer) {
-            console.log('Appending controls to target container');
-            console.log('Container element:', targetContainer);
-            console.log('Container element classes:', targetContainer.className);
 
             // Add class to ensure relative positioning
             targetContainer.classList.add('has-obsidian-r-controls');
             targetContainer.appendChild(this.controlsEl!);
 
-            console.log('Controls appended. ControlsEl:', this.controlsEl);
-            console.log('Controls element display style:', this.controlsEl?.style.display);
-            console.log('Controls element classes:', this.controlsEl?.className);
 
             // CRITICAL: Refresh all icons after controls are appended to DOM with delay
             setTimeout(() => {
-                console.log('🔄 Refreshing all icons after controls appended to DOM (delayed)');
                 IconManager.refreshIcons(this.controlsEl!);
-                console.log('🔄 Final icon refresh completed');
             }, 100);
         } else {
-            console.log('No suitable container found, falling back to document body');
             document.body.appendChild(this.controlsEl!);
 
             // CRITICAL: Refresh all icons after controls are appended to DOM with delay
             setTimeout(() => {
-                console.log('🔄 Refreshing all icons after controls appended to body (delayed)');
                 IconManager.refreshIcons(this.controlsEl!);
-                console.log('🔄 Final icon refresh completed');
             }, 100);
         }
     }
@@ -1605,7 +1514,8 @@ export default class ObsidianRPlugin extends Plugin {
         const icon = await IconManager.createIcon(iconName, 'obsidian-r-toggle-icon');
 
         // Handle toggle click
-        toggle.addEventListener('click', () => {
+        toggle.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent event from bubbling up
             checkbox.checked = !checkbox.checked;
             const newChecked = checkbox.checked;
 
@@ -1639,39 +1549,21 @@ export default class ObsidianRPlugin extends Plugin {
      * Shows reader controls and auto-hide after 3 seconds
      */
     private showReaderControls() {
-        console.log('📍 showReaderControls() called');
         console.trace('showReaderControls() call stack');
         if (!this.controlsEl) {
-            console.log('No controlsEl found in showReaderControls');
             return;
         }
 
-        console.log('Showing reader controls');
-        console.log('Controls element before show:', this.controlsEl);
-        console.log('Controls parent:', this.controlsEl.parentElement);
 
         this.controlsEl.style.display = 'block';
         this.controlsEl.classList.add('visible');
 
-        console.log('Controls element after show - display:', this.controlsEl.style.display);
-        console.log('Controls element after show - classes:', this.controlsEl.className);
 
         // Debug computed styles
         const computedStyle = window.getComputedStyle(this.controlsEl);
-        console.log('Controls computed styles:');
-        console.log('  position:', computedStyle.position);
-        console.log('  bottom:', computedStyle.bottom);
-        console.log('  left:', computedStyle.left);
-        console.log('  transform:', computedStyle.transform);
-        console.log('  opacity:', computedStyle.opacity);
-        console.log('  z-index:', computedStyle.zIndex);
-        console.log('  width:', computedStyle.width);
-        console.log('  height:', computedStyle.height);
 
         // Debug element positioning
         const rect = this.controlsEl.getBoundingClientRect();
-        console.log('Controls bounding rect:', rect);
-        console.log('Controls visible in viewport:', rect.top >= 0 && rect.left >= 0 && rect.top < window.innerHeight && rect.left < window.innerWidth);
 
         // Ensure zen icon is in correct state after showing controls
         setTimeout(() => this.updateZenIcon(), 50);
@@ -1721,9 +1613,7 @@ export default class ObsidianRPlugin extends Plugin {
      * Adjusts font size
      */
     private adjustFontSize(delta: number) {
-        console.log('🔧 Adjusting font size by:', delta, 'current size:', this.settings.fontSize);
         this.settings.fontSize = Math.max(10, Math.min(32, this.settings.fontSize + delta));
-        console.log('🔧 New font size:', this.settings.fontSize);
         this.saveSettings();
 
         // Use the comprehensive refresh method for reader mode updates
@@ -1734,7 +1624,6 @@ export default class ObsidianRPlugin extends Plugin {
      * Changes font family
      */
     private changeFontFamily(fontFamily: string) {
-        console.log('🔧 Changing font family to:', fontFamily);
         this.settings.fontFamily = fontFamily;
         this.saveSettings();
 
@@ -1766,16 +1655,13 @@ export default class ObsidianRPlugin extends Plugin {
      * Toggles zen mode (hides/shows sidebars and tab bar)
      */
     private toggleZenMode() {
-        console.log('Zen mode toggle activated, current zenMode state:', this.zenMode);
 
         // Toggle left sidebar visibility
         const leftSidebarEl = document.querySelector('.workspace-split.mod-left-split') as HTMLElement;
         if (leftSidebarEl) {
             const isHidden = leftSidebarEl.style.display === 'none';
             leftSidebarEl.style.display = isHidden ? '' : 'none';
-            console.log('Left sidebar:', isHidden ? 'shown' : 'hidden');
         } else {
-            console.log('Left sidebar element not found');
         }
 
         // Toggle right sidebar visibility  
@@ -1783,64 +1669,47 @@ export default class ObsidianRPlugin extends Plugin {
         if (rightSidebarEl) {
             const isHidden = rightSidebarEl.style.display === 'none';
             rightSidebarEl.style.display = isHidden ? '' : 'none';
-            console.log('Right sidebar:', isHidden ? 'shown' : 'hidden');
         } else {
-            console.log('Right sidebar element not found');
         }
 
         // Toggle view actions visibility
         const viewActionsElements = document.querySelectorAll('.view-actions') as NodeListOf<HTMLElement>;
-        console.log(`Found ${viewActionsElements.length} view-actions element(s)`);
         viewActionsElements.forEach((viewActionsEl, index) => {
             const isHidden = viewActionsEl.style.display === 'none';
             viewActionsEl.style.display = isHidden ? '' : 'none';
-            console.log(`View actions ${index + 1}:`, isHidden ? 'shown' : 'hidden');
         });
 
         // Toggle view header left visibility
         const viewHeaderLeftElements = document.querySelectorAll('.view-header-left') as NodeListOf<HTMLElement>;
-        console.log(`Found ${viewHeaderLeftElements.length} view-header-left element(s)`);
         viewHeaderLeftElements.forEach((viewHeaderLeftEl, index) => {
             const isHidden = viewHeaderLeftEl.style.display === 'none';
             viewHeaderLeftEl.style.display = isHidden ? '' : 'none';
-            console.log(`View header left ${index + 1}:`, isHidden ? 'shown' : 'hidden');
         });
 
         // Toggle status bar visibility
         const statusBarElements = document.querySelectorAll('.status-bar') as NodeListOf<HTMLElement>;
-        console.log(`Found ${statusBarElements.length} status-bar element(s)`);
         statusBarElements.forEach((statusBarEl, index) => {
             const isHidden = statusBarEl.style.display === 'none';
             statusBarEl.style.display = isHidden ? '' : 'none';
-            console.log(`Status bar ${index + 1}:`, isHidden ? 'shown' : 'hidden');
         });
 
         // Toggle tab bar visibility
-        console.log('Attempting to hide all tab bar containers...');
 
         // Target all .workspace-tab-header-container elements
         const tabBarElements = document.querySelectorAll('.workspace-tab-header-container') as NodeListOf<HTMLElement>;
-        console.log(`Found ${tabBarElements.length} tab bar container(s)`);
 
         tabBarElements.forEach((tabBarEl, index) => {
             const isHidden = tabBarEl.style.display === 'none';
             tabBarEl.style.display = isHidden ? '' : 'none';
-            console.log(`Tab bar container ${index + 1}:`, isHidden ? 'shown' : 'hidden');
-            console.log(`  Classes: ${tabBarEl.className}`);
-            console.log(`  New display style: ${tabBarEl.style.display}`);
-            console.log(`  Element:`, tabBarEl);
         });
 
         if (tabBarElements.length === 0) {
-            console.log('No .workspace-tab-header-container elements found');
         }
 
-        console.log('Zen mode toggle completed');
 
         // Force a small delay and then refresh controls to ensure icon state is preserved
         setTimeout(() => {
             if (this.controlsEl) {
-                console.log('🔄 Post-zen-toggle: Ensuring zen icon state is correct');
                 this.updateZenIcon();
             }
         }, 100);
@@ -1852,18 +1721,15 @@ export default class ObsidianRPlugin extends Plugin {
     private updateZenIconAttribute(zenElement: HTMLElement): void {
         const iconEl = zenElement.querySelector('.obsidian-r-toggle-icon') as HTMLElement;
         if (!iconEl) {
-            console.log('❌ Zen icon element not found for attribute update');
             return;
         }
 
         const currentAttribute = iconEl.getAttribute('data-lucide');
         const expectedAttribute = this.zenMode ? 'eye-off' : 'eye';
 
-        console.log('🎯 Updating zen icon data-lucide from', currentAttribute, 'to', expectedAttribute, '(zenMode:', this.zenMode + ')');
 
         iconEl.setAttribute('data-lucide', expectedAttribute);
 
-        console.log('✅ Zen icon data-lucide attribute updated, refreshIcons will now load correct icon');
     }
 
     /**
@@ -1874,40 +1740,33 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Find ALL zen buttons, not just the first one
         const zenButtons = this.controlsEl.querySelectorAll('.obsidian-r-pane-toggle') as NodeListOf<HTMLElement>;
-        console.log('🔍 Found', zenButtons.length, 'pane toggle buttons');
 
         // Find the zen button specifically (it should be the last one in the pane group)
         let zenButton: HTMLElement | null = null;
         zenButtons.forEach((button, index) => {
             const iconEl = button.querySelector('.obsidian-r-toggle-icon') as HTMLElement;
             const iconName = iconEl?.getAttribute('data-lucide');
-            console.log(`  Button ${index}: icon="${iconName}", classes="${button.className}"`);
 
             // The zen button should have either 'eye' or 'eye-off' icon
             if (iconName === 'eye' || iconName === 'eye-off') {
                 zenButton = button;
-                console.log(`  ✅ Found zen button at index ${index}`);
             }
         });
 
         if (!zenButton) {
-            console.log('❌ Zen button not found among', zenButtons.length, 'buttons');
             return;
         }
 
         const iconEl = zenButton.querySelector('.obsidian-r-toggle-icon') as HTMLElement;
         if (!iconEl) {
-            console.log('❌ Zen icon element not found in button');
             return;
         }
 
         const currentIconName = iconEl.getAttribute('data-lucide');
         const expectedIconName = this.zenMode ? 'eye-off' : 'eye';
 
-        console.log('🎯 Current icon:', currentIconName, '| Expected:', expectedIconName, '| Zen mode:', this.zenMode);
 
         if (currentIconName === expectedIconName) {
-            console.log('✅ Icon is already correct, no update needed');
             return;
         }
 
@@ -1917,7 +1776,6 @@ export default class ObsidianRPlugin extends Plugin {
 
             const newIcon = await IconManager.createIcon(expectedIconName, 'obsidian-r-toggle-icon');
             iconEl.parentNode?.replaceChild(newIcon, iconEl);
-            console.log('✅ Zen icon successfully updated from', currentIconName, 'to', expectedIconName);
         } catch (error) {
             console.error('❌ Failed to update zen icon:', error);
         }
@@ -1927,72 +1785,59 @@ export default class ObsidianRPlugin extends Plugin {
      * Restores UI elements to their normal state (shows sidebars and tab bar)
      */
     private restoreZenMode() {
-        console.log('Restoring zen mode - showing all UI elements');
 
         // Show left sidebar
         const leftSidebarEl = document.querySelector('.workspace-split.mod-left-split') as HTMLElement;
         if (leftSidebarEl) {
             leftSidebarEl.style.display = '';
-            console.log('Left sidebar restored');
         }
 
         // Show right sidebar  
         const rightSidebarEl = document.querySelector('.workspace-split.mod-right-split') as HTMLElement;
         if (rightSidebarEl) {
             rightSidebarEl.style.display = '';
-            console.log('Right sidebar restored');
         }
 
         // Show view actions
         const viewActionsElements = document.querySelectorAll('.view-actions') as NodeListOf<HTMLElement>;
         viewActionsElements.forEach((viewActionsEl, index) => {
             viewActionsEl.style.display = '';
-            console.log(`View actions ${index + 1} restored`);
         });
 
         // Show view header left
         const viewHeaderLeftElements = document.querySelectorAll('.view-header-left') as NodeListOf<HTMLElement>;
         viewHeaderLeftElements.forEach((viewHeaderLeftEl, index) => {
             viewHeaderLeftEl.style.display = '';
-            console.log(`View header left ${index + 1} restored`);
         });
 
         // Show status bar
         const statusBarElements = document.querySelectorAll('.status-bar') as NodeListOf<HTMLElement>;
         statusBarElements.forEach((statusBarEl, index) => {
             statusBarEl.style.display = '';
-            console.log(`Status bar ${index + 1} restored`);
         });
 
         // Show tab bar
-        console.log('Restoring all tab bar containers...');
 
         // Restore all .workspace-tab-header-container elements
         const tabBarElements = document.querySelectorAll('.workspace-tab-header-container') as NodeListOf<HTMLElement>;
-        console.log(`Found ${tabBarElements.length} tab bar container(s) to restore`);
 
         tabBarElements.forEach((tabBarEl, index) => {
             tabBarEl.style.display = '';
-            console.log(`Tab bar container ${index + 1} restored`);
         });
 
         if (tabBarElements.length === 0) {
-            console.log('No tab bar containers found to restore');
         }
 
-        console.log('Zen mode restoration completed');
     }
 
     /**
      * Sets up keyboard event handlers for reader mode
      */
     private addReaderModeKeyboardHandlers() {
-        // console.log('Setting up reader mode keyboard handlers...');
 
         const testHandler = (e: KeyboardEvent) => {
             if (!this.readerModeState.isActive) return;
 
-            // console.log('Reader mode key pressed:', e.key, 'Code:', e.code, 'Modifiers:', {
             //     ctrl: e.ctrlKey,
             //     meta: e.metaKey,
             //     alt: e.altKey,
@@ -2002,7 +1847,6 @@ export default class ObsidianRPlugin extends Plugin {
             // Page navigation
             if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    console.log('Previous page key detected');
                     e.preventDefault();
                     // Chapter navigation could be implemented here
                     return;
@@ -2011,7 +1855,6 @@ export default class ObsidianRPlugin extends Plugin {
 
             if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    console.log('Next page key detected');
                     e.preventDefault();
                     // Chapter navigation could be implemented here
                     return;
@@ -2021,7 +1864,6 @@ export default class ObsidianRPlugin extends Plugin {
             // Home/End for first/last page
             if (e.key === 'Home') {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    console.log('Home key detected');
                     e.preventDefault();
                     // Could scroll to top if needed
                     return;
@@ -2030,7 +1872,6 @@ export default class ObsidianRPlugin extends Plugin {
 
             if (e.key === 'End') {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    console.log('End key detected');
                     e.preventDefault();
                     // Could scroll to bottom if needed
                     return;
@@ -2040,7 +1881,6 @@ export default class ObsidianRPlugin extends Plugin {
             // Test for font size keys (without modifiers)
             if (e.key === '+' || e.key === '=') {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    console.log('Plus key detected - increasing font size');
                     e.preventDefault();
                     this.adjustFontSize(1);
                     return;
@@ -2049,7 +1889,6 @@ export default class ObsidianRPlugin extends Plugin {
 
             if (e.key === '-') {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    console.log('Minus key detected - decreasing font size');
                     e.preventDefault();
                     this.adjustFontSize(-1);
                     return;
@@ -2070,7 +1909,6 @@ export default class ObsidianRPlugin extends Plugin {
         if (this.readerKeyboardHandler) {
             document.removeEventListener('keydown', this.readerKeyboardHandler, { capture: true });
             this.readerKeyboardHandler = null;
-            // console.log('Removed reader mode keyboard handlers');
         }
     }
 
@@ -2111,7 +1949,6 @@ export default class ObsidianRPlugin extends Plugin {
             this.readerModeEl = null;
         }
 
-        console.log('Reader mode UI destroyed, sidebars should be unaffected');
     }
 
     /**
@@ -2149,18 +1986,15 @@ export default class ObsidianRPlugin extends Plugin {
         if (this.settings.lineSpacing === 1.0) {
             this.settings.lineSpacing = 1.5;
             settingsUpdated = true;
-            console.log('📖 Migrated lineSpacing to new default: 1.5');
         }
         if (this.settings.characterSpacing === 0.0) {
             this.settings.characterSpacing = 0.02;
             settingsUpdated = true;
-            console.log('📖 Migrated characterSpacing to new default: 0.02');
         }
 
         // Save migrated settings
         if (settingsUpdated) {
             await this.saveSettings();
-            console.log('📖 Settings migrated and saved');
         }
     }    /**
      * Saves plugin settings
@@ -2173,22 +2007,17 @@ export default class ObsidianRPlugin extends Plugin {
      * Refreshes reader mode rendering when settings change
      */
     public refreshReaderModeIfActive() {
-        console.log('🔄 refreshReaderModeIfActive called - isActive:', this.readerModeState.isActive);
         if (this.readerModeState.isActive) {
-            console.log('🔄 Settings changed while in reader mode, refreshing styles...');
             this.applyReaderModeStyles();
 
             // Recreate controls to reflect updated settings
             if (this.controlsEl) {
-                console.log('🔄 Recreating controls to reflect updated settings...');
                 this.controlsEl.remove();
                 this.controlsEl = null;
                 this.createReaderControls();
             }
 
-            console.log('🔄 Reader mode refresh completed');
         } else {
-            console.log('🔄 Reader mode not active, skipping refresh');
         }
     }
 
@@ -2233,7 +2062,6 @@ class ObsidianRSettingTab extends PluginSettingTab {
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.justified)
                 .onChange(async (value) => {
-                    console.log('🔧 Justified setting changed to:', value);
                     this.plugin.settings.justified = value;
                     await this.plugin.saveSettings();
                     this.plugin.refreshReaderModeIfActive();
@@ -2312,7 +2140,6 @@ class ObsidianRSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.fontSize)
                 .setDynamicTooltip()
                 .onChange(async (value) => {
-                    console.log('🔧 Font size setting changed to:', value);
                     this.plugin.settings.fontSize = value;
                     await this.plugin.saveSettings();
                     this.plugin.refreshReaderModeIfActive();
