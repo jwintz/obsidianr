@@ -977,36 +977,42 @@ export default class ObsidianRPlugin extends Plugin {
                 padding: 0 !important; /* Reset padding for accurate margin computation */
             }
 
-            /* Hide frontmatter in reader mode */
+            /* Hide frontmatter in reader mode - for any tab with reader mode, not just active */
             .obsidian-r-active .metadata-container,
             .workspace-leaf.has-obsidian-r-controls .metadata-container,
             .workspace-leaf-content.has-obsidian-r-controls .metadata-container {
                 display: none !important;
             }
 
-            /* Hide navigation elements in reader mode */
-            .obsidian-r-active .nav-header,
-            .obsidian-r-active .backlink-pane,
-            .obsidian-r-active .mod-footer,
-            .workspace-leaf.has-obsidian-r-controls .nav-header,
-            .workspace-leaf.has-obsidian-r-controls .backlink-pane,
-            .workspace-leaf.has-obsidian-r-controls .mod-footer,
-            .workspace-leaf-content.has-obsidian-r-controls .nav-header,
-            .workspace-leaf-content.has-obsidian-r-controls .backlink-pane,
-            .workspace-leaf-content.has-obsidian-r-controls .mod-footer {
+            /* Hide navigation elements in reader mode - only in active tab */
+            .workspace-leaf.mod-active .obsidian-r-active .nav-header,
+            .workspace-leaf.mod-active .obsidian-r-active .backlink-pane,
+            .workspace-leaf.mod-active .obsidian-r-active .mod-footer,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .nav-header,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .backlink-pane,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .mod-footer {
                 display: none !important;
             }
 
-            /* Hide heading collapse indicators in reader mode - only for active tab */
-            .workspace-leaf.mod-active .obsidian-r-active .heading-collapse-indicator,
-            .workspace-leaf.mod-active .obsidian-r-active .collapse-indicator,
-            .workspace-leaf.mod-active .obsidian-r-active .collapse-icon,
-            .workspace-leaf.mod-active.has-obsidian-r-controls .heading-collapse-indicator,
-            .workspace-leaf.mod-active.has-obsidian-r-controls .collapse-indicator,
-            .workspace-leaf.mod-active.has-obsidian-r-controls .collapse-icon,
-            .workspace-leaf-content.mod-active.has-obsidian-r-controls .heading-collapse-indicator,
-            .workspace-leaf-content.mod-active.has-obsidian-r-controls .collapse-indicator,
-            .workspace-leaf-content.mod-active.has-obsidian-r-controls .collapse-icon {
+            /* Hide heading collapse indicators in reader mode - only in markdown content, not file explorer or sidebars */
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-preview-view .heading-collapse-indicator,
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-preview-view .collapse-indicator,
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-preview-view .collapse-icon,
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-reading-view .heading-collapse-indicator,
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-reading-view .collapse-indicator,
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-reading-view .collapse-icon,
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-source-view .heading-collapse-indicator,
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-source-view .collapse-indicator,
+            .workspace-leaf.mod-active .obsidian-r-active .markdown-source-view .collapse-icon,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-preview-view .heading-collapse-indicator,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-preview-view .collapse-indicator,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-preview-view .collapse-icon,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-reading-view .heading-collapse-indicator,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-reading-view .collapse-indicator,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-reading-view .collapse-icon,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-source-view .heading-collapse-indicator,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-source-view .collapse-indicator,
+            .workspace-leaf.mod-active.has-obsidian-r-controls .markdown-source-view .collapse-icon {
                 display: none !important;
             }
 
@@ -1839,12 +1845,6 @@ export default class ObsidianRPlugin extends Plugin {
 
         const testHandler = (e: KeyboardEvent) => {
             if (!this.readerModeState.isActive) return;
-
-            //     ctrl: e.ctrlKey,
-            //     meta: e.metaKey,
-            //     alt: e.altKey,
-            //     shift: e.shiftKey
-            // });
 
             // Page navigation
             if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
