@@ -820,12 +820,12 @@ export default class ObsidianRPlugin extends Plugin {
         // Switch to reading view for better reading experience
         await this.switchToReadingView();
 
+        // Apply visual styling to content area immediately after view switch
+        this.applyReaderModeStyles();
+
         // Create reader mode UI
         await this.createReaderModeUI();
         this.showReaderControls();
-
-        // Apply visual styling to content area
-        this.applyReaderModeStyles();
 
         // Add reader mode keyboard handlers
         this.addReaderModeKeyboardHandlers();
@@ -1846,39 +1846,8 @@ export default class ObsidianRPlugin extends Plugin {
         const testHandler = (e: KeyboardEvent) => {
             if (!this.readerModeState.isActive) return;
 
-            // Page navigation
-            if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
-                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    e.preventDefault();
-                    // Chapter navigation could be implemented here
-                    return;
-                }
-            }
-
-            if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
-                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    e.preventDefault();
-                    // Chapter navigation could be implemented here
-                    return;
-                }
-            }
-
-            // Home/End for first/last page
-            if (e.key === 'Home') {
-                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    e.preventDefault();
-                    // Could scroll to top if needed
-                    return;
-                }
-            }
-
-            if (e.key === 'End') {
-                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    e.preventDefault();
-                    // Could scroll to bottom if needed
-                    return;
-                }
-            }
+            // Only handle font size keys, allow normal scrolling for navigation keys
+            // Remove preventDefault() for arrow keys, Page Up/Down, Home/End to restore normal scrolling
 
             // Test for font size keys (without modifiers)
             if (e.key === '+' || e.key === '=') {

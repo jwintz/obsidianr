@@ -404,8 +404,9 @@
     text-indent: 0;
 }
 
-/* Smooth transitions */
-.obsidian-r-reader-mode * {
+/* Smooth transitions - only for typography changes, not all elements */
+.obsidian-r-reader-mode .markdown-preview-sizer,
+.obsidian-r-reader-mode .cm-content {
     transition: font-size 0.3s ease, font-family 0.3s ease, line-height 0.3s ease;
 }
 
@@ -431,7 +432,7 @@
     transition: transform 0.4s ease-out, opacity 0.4s ease-out;
 }
 
-/* Pagination Layout */
+/* Pagination Layout - NOTE: These styles will disable scrolling if applied */
 .obsidian-r-paginated {
     overflow: hidden !important;
 }
