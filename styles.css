@@ -37,6 +37,25 @@
     max-height: none !important;
 }
 
+/* Bottom margin page indicator - shown when controls are displayed */
+.obsidian-r-bottom-margin-indicator {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: var(--background-primary) !important;
+    color: var(--text-normal) !important;
+    font-size: var(--font-ui-small) !important;
+    font-weight: var(--font-weight-medium) !important;
+    border-top: 1px solid var(--background-modifier-border) !important;
+    z-index: 2001 !important;
+    pointer-events: none !important;
+    transition: all 0.2s ease !important;
+}
+
 /* Icon styles for Lucide icons and fallbacks */
 .obsidian-r-icon-button {
     background: none;
@@ -109,73 +128,16 @@
     pointer-events: auto;
 }
 
-/* Top pill - Chapter progress (positioned in content area, not header) */
-.obsidian-r-top-pill {
-    position: absolute !important;
-    top: 20px; /* Position from top of tab content */
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--background-primary);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    background-color: rgba(var(--background-primary-rgb), 0.95);
-    border: 2px solid var(--accent-color);
-    border-radius: var(--radius-m);
-    padding: 8px 16px;
-    font-size: var(--font-ui-small);
-    font-weight: var(--font-weight-bold);
-    color: var(--text-accent);
-    z-index: 2000 !important;
-    pointer-events: none;
-    box-shadow: var(--shadow-l);
-    white-space: nowrap;
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-}
-
-/* Ensure the pill container has relative positioning */
-.markdown-source-view,
-.markdown-reading-view,
-.workspace-leaf-content {
-    position: relative;
-}
-
-/* Ensure workspace leaf container has relative positioning for pills and controls */
+/* Ensure workspace leaf container has relative positioning for controls */
 .workspace-leaf.has-obsidian-r-controls,
 .workspace-leaf-content.obsidian-r-active {
     position: relative !important;
 }
 
-/* Bottom pill - Total progress (positioned within tab container) */
-.obsidian-r-bottom-pill {
-    position: absolute !important;
-    bottom: 20px; /* 20px from bottom of tab container */
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--background-primary);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    background-color: rgba(var(--background-primary-rgb), 0.95);
-    border: 2px solid var(--accent-color);
-    border-radius: var(--radius-m);
-    padding: 8px 16px;
-    font-size: var(--font-ui-small);
-    font-weight: var(--font-weight-bold);
-    color: var(--text-accent);
-    z-index: 1999 !important; /* Below controls */
-    pointer-events: none;
-    box-shadow: var(--shadow-l);
-    white-space: nowrap;
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-}
-
-/* Controls overlay - positioned above bottom pill with equal spacing */
+/* Controls overlay - positioned within tab container as overlay above content */
 .obsidian-r-controls {
     position: absolute !important; /* Changed to absolute for tab-relative positioning */
-    bottom: 78px; /* 20px (pill margin) + 38px (pill height) + 20px (spacing) = 78px */
+    bottom: calc(var(--obsidian-r-header-height, 30px) + 20px); /* Above bottom margin indicator with 20px gap */
     left: 50%;
     background: var(--background-primary);
     backdrop-filter: blur(10px);
@@ -183,7 +145,7 @@
     background-color: rgba(var(--background-primary-rgb), 0.9);
     border: 1px solid var(--background-modifier-border);
     border-radius: var(--radius-m);
-    z-index: 2000 !important; /* Above pill */
+    z-index: 2000 !important; /* Above content and bottom margin indicator */
     opacity: 0;
     transform: translateX(-50%) translateY(10px);
     transition: all 0.2s ease;
@@ -488,45 +450,25 @@
     overflow-x: hidden !important;
 }
 
-/* Content container for smooth transitions */
-.obsidian-r-content-container {
-    transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+/* Adjust content to account for bottom margin indicator */
+.obsidian-r-paginated .markdown-reading-view,
+.obsidian-r-paginated .markdown-preview-view {
+    padding-bottom: var(--obsidian-r-header-height, 30px) !important;
+    box-sizing: border-box !important;
 }
 
-/* Page indicators styling improvements */
-.obsidian-r-top-pill,
-.obsidian-r-bottom-pill {
-    font-family: var(--font-interface) !important;
-    user-select: none;
-    cursor: default;
-    z-index: 2001 !important;
-}
-
-/* Improve pill visibility on all themes */
-.obsidian-r-top-pill {
-    background: rgba(var(--background-primary-rgb), 0.95) !important;
-    border: 1px solid var(--background-modifier-border) !important;
-    backdrop-filter: blur(8px) !important;
-    -webkit-backdrop-filter: blur(8px) !important;
-}
-
-.obsidian-r-bottom-pill {
-    background: rgba(var(--background-primary-rgb), 0.95) !important;
-    border: 1px solid var(--background-modifier-border) !important;
-    backdrop-filter: blur(8px) !important;
-    -webkit-backdrop-filter: blur(8px) !important;
+/* Ensure markdown-rendered spans to bottom margin indicator */
+.obsidian-r-paginated .markdown-preview-view .markdown-rendered {
+    min-height: calc(100vh - var(--obsidian-r-header-height, 30px)) !important;
+    height: auto !important;
+    padding-bottom: var(--obsidian-r-header-height, 30px) !important;
+    box-sizing: border-box !important;
 }
 
 /* Enhanced mobile responsiveness for pagination */
 @media (max-width: 768px) {
-    .obsidian-r-top-pill,
-    .obsidian-r-bottom-pill {
-        font-size: var(--font-ui-smaller) !important;
-        padding: 6px 12px !important;
-    }
-    
     .obsidian-r-controls {
-        bottom: 60px !important; /* Adjust for smaller pill height on mobile */
+        bottom: 20px !important; /* Adjust for mobile */
     }
 }
 
