@@ -367,11 +367,11 @@ class PaginationEngine {
 
         // Calculate how many pages we need based on simple division
         const rawPagesNeeded = totalHeight / availableHeight;
-        
+
         // If the last page would have less than 10% of available height, merge it with previous page
         const minContentRatio = 0.1; // 10% minimum content for a page
         const remainder = rawPagesNeeded % 1;
-        
+
         let pagesNeeded;
         if (remainder > 0 && remainder < minContentRatio) {
             // Round down instead of up if remainder is too small
@@ -380,7 +380,7 @@ class PaginationEngine {
         } else {
             pagesNeeded = Math.ceil(rawPagesNeeded);
         }
-        
+
         console.log(`📄 Pages needed: ${pagesNeeded} (${totalHeight}px ÷ ${availableHeight}px = ${rawPagesNeeded.toFixed(2)})`);
 
         // Ensure we have at least 1 page
@@ -556,7 +556,7 @@ class PaginationEngine {
     /**
      * Navigates to a specific page in the paginated content
      */
-    async navigateToPage(paginationData: PaginationData, pageIndex: number): Promise<boolean> {
+    async navigateToPage(paginationData: PaginationData, pageIndex: number, transitionType?: string): Promise<boolean> {
         console.log(`🎯 Navigate to page ${pageIndex + 1}/${paginationData.totalPages}`);
 
         if (!paginationData.contentContainer || pageIndex < 0 || pageIndex >= paginationData.totalPages) {
@@ -570,17 +570,72 @@ class PaginationEngine {
             return false;
         }
 
-        // REAL PAGINATION: Use transform to show only the target page
+        // Use the passed transition type or default to scroll
+        const activeTransitionType = transitionType || 'scroll';
         const container = paginationData.contentContainer;
         const pageHeight = paginationData.viewport.height - paginationData.viewport.topMargin - paginationData.viewport.bottomMargin;
-
-        // Calculate the Y offset to show this page
         const offsetY = -(pageIndex * pageHeight);
 
-        console.log(`📐 Moving content by ${offsetY}px (page height: ${pageHeight}px)`);
+        console.log(`📐 Moving content by ${offsetY}px (page height: ${pageHeight}px), transition: ${activeTransitionType}`);
 
-        // Apply the transform to show only this page - no hardcoded transition
-        container.style.transform = `translateY(${offsetY}px)`;
+        // Apply different navigation behaviors based on transition type
+        switch (activeTransitionType) {
+            case 'none':
+                // Instant jump, no animation
+                container.style.transition = 'none';
+                container.style.transform = `translateY(${offsetY}px)`;
+                break;
+
+            case 'fade':
+                // Fade out, move, fade in
+                container.style.transition = 'opacity 0.3s ease-in-out';
+                container.style.opacity = '0';
+
+                setTimeout(() => {
+                    container.style.transition = 'none';
+                    container.style.transform = `translateY(${offsetY}px)`;
+
+                    // Force reflow then fade back in
+                    container.offsetHeight;
+                    container.style.transition = 'opacity 0.3s ease-in-out';
+                    container.style.opacity = '1';
+                }, 150);
+                break;
+
+            case 'slide':
+                // Horizontal slide effect (slide left/right instead of up/down)
+                container.style.transition = 'transform 0.3s ease-in-out';
+                container.style.transform = `translateX(-100vw)`; // Slide out to left
+
+                setTimeout(() => {
+                    container.style.transition = 'none';
+                    container.style.transform = `translateY(${offsetY}px) translateX(100vw)`; // Position new content on right
+
+                    // Force reflow then slide in from right
+                    container.offsetHeight;
+                    container.style.transition = 'transform 0.3s ease-in-out';
+                    container.style.transform = `translateY(${offsetY}px) translateX(0)`;
+                }, 150);
+                break;
+
+            case 'page-curl':
+                // Simulate page curl with scaling and rotation
+                container.style.transition = 'transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+                container.style.transformOrigin = 'top right';
+                container.style.transform = `translateY(${container.style.transform?.match(/translateY\(([^)]+)\)/)?.[1] || '0'}) rotateY(-15deg) scaleX(0.9)`;
+
+                setTimeout(() => {
+                    container.style.transform = `translateY(${offsetY}px) rotateY(0deg) scaleX(1)`;
+                }, 50);
+                break;
+
+            case 'scroll':
+            default:
+                // Traditional vertical scroll (current behavior)
+                container.style.transition = 'transform 0.4s ease-out';
+                container.style.transform = `translateY(${offsetY}px)`;
+                break;
+        }
 
         // Only enable pagination mode if not already enabled to avoid redundant calls
         if (!container.classList.contains('pagination-content')) {
@@ -623,7 +678,7 @@ class PaginationEngine {
             container.style.height = 'auto'; // Let it be as tall as the content needs
             container.style.minHeight = '100%'; // At least fill the viewport
             container.style.maxHeight = 'none'; // No maximum height constraint
-            container.style.transition = 'transform 0.3s ease-in-out';
+            // Don't set transition here - let applyPageTransition handle it based on settings
             container.classList.add('pagination-content');
 
             console.log(`✅ Pagination viewport enabled: viewport = ${pageHeight}px, margins = ${viewport.leftMargin}px/${viewport.rightMargin}px, content = unconstrained`);
@@ -636,7 +691,7 @@ class PaginationEngine {
             container.style.height = 'auto';
             container.style.minHeight = '100%';
             container.style.maxHeight = 'none';
-            container.style.transition = 'transform 0.3s ease-in-out';
+            // Don't set transition here - let applyPageTransition handle it based on settings
             container.classList.add('pagination-content');
 
             console.log(`✅ Pagination viewport enabled: viewport = ${pageHeight}px, content = unconstrained`);
@@ -1635,12 +1690,11 @@ export default class ObsidianRPlugin extends Plugin {
                     // Enable pagination mode on the content container with viewport parameters
                     this.paginationEngine.enablePaginationMode(contentContainer, pageHeight, viewport);
 
-                    // Set up initial transition settings
-                    this.readerModeState.paginationData = paginationData; // Ensure pagination data is set before applying transition
-                    this.applyPageTransition();
+                    // Set pagination data and navigate to first page
+                    this.readerModeState.paginationData = paginationData;
 
                     // Navigate to first page to ensure pagination is visible
-                    await this.paginationEngine.navigateToPage(paginationData, 0);
+                    await this.paginationEngine.navigateToPage(paginationData, 0, this.settings.transitionType);
 
                 } else {
                     console.log('⚠️ No content container found');
@@ -1651,7 +1705,7 @@ export default class ObsidianRPlugin extends Plugin {
             await this.restoreReadingPosition();
 
             // Show bottom margin page indicator (always visible in reader mode)
-            this.showBottomMarginPageIndicator();
+            await this.showBottomMarginPageIndicator();
 
         } catch (error) {
             console.error('❌ Failed to initialize pagination:', error);
@@ -1674,7 +1728,7 @@ export default class ObsidianRPlugin extends Plugin {
         // Get the actual height of the view-header-title-container for bottom margin
         const titleContainer = document.querySelector('.view-header-title-container') as HTMLElement;
         const actualHeaderHeight = titleContainer ? titleContainer.offsetHeight : 37; // fallback to 37px (typical header height)
-        
+
         // Bottom margin should be vertical margin + actual header height
         const bottomMarginPx = verticalMarginPx + actualHeaderHeight;
 
@@ -1838,13 +1892,11 @@ export default class ObsidianRPlugin extends Plugin {
 
         if (nextPageIndex < paginationData.totalPages) {
             console.log(`🔄 Navigating to page ${nextPageIndex + 1}`);
-            // Apply page transition settings before navigation
-            this.applyPageTransition();
             // Navigate to next page in current chapter
-            const success = await this.paginationEngine.navigateToPage(paginationData, nextPageIndex);
+            const success = await this.paginationEngine.navigateToPage(paginationData, nextPageIndex, this.settings.transitionType);
             if (success) {
                 console.log('✅ Navigation successful');
-                this.updatePageDisplay();
+                await this.updatePageDisplay();
                 this.saveReadingPosition(); // Save position after navigation
             } else {
                 console.log('❌ Navigation failed');
@@ -1876,13 +1928,11 @@ export default class ObsidianRPlugin extends Plugin {
 
         if (prevPageIndex >= 0) {
             console.log(`🔄 Navigating to page ${prevPageIndex + 1}`);
-            // Apply page transition settings before navigation
-            this.applyPageTransition();
             // Navigate to previous page in current chapter
-            const success = await this.paginationEngine.navigateToPage(paginationData, prevPageIndex);
+            const success = await this.paginationEngine.navigateToPage(paginationData, prevPageIndex, this.settings.transitionType);
             if (success) {
                 console.log('✅ Navigation successful');
-                this.updatePageDisplay();
+                await this.updatePageDisplay();
                 this.saveReadingPosition(); // Save position after navigation
             } else {
                 console.log('❌ Navigation failed');
@@ -1933,14 +1983,14 @@ export default class ObsidianRPlugin extends Plugin {
         }
 
         // Navigate to the saved page
-        this.applyPageTransition(); // Set up transitions before navigation
         const success = await this.paginationEngine.navigateToPage(
             this.readerModeState.paginationData,
-            savedPosition.pageIndex
+            savedPosition.pageIndex,
+            this.settings.transitionType
         );
 
         if (success) {
-            this.updatePageDisplay();
+            await this.updatePageDisplay();
 
             // Update the reading position in state
             this.readerModeState.readingPosition = savedPosition;
@@ -1950,7 +2000,78 @@ export default class ObsidianRPlugin extends Plugin {
     /**
      * Updates the page number displays in the UI
      */
-    private updatePageDisplay(): void {
+    /**
+     * Calculates book-wide page numbers for the current position
+     */
+    private async calculateBookWidePageNumbers(): Promise<{ bookCurrentPage: number, bookTotalPages: number; } | null> {
+        if (!this.readerModeState.currentBook ||
+            !this.readerModeState.currentChapter ||
+            !this.readerModeState.paginationData) {
+            return null;
+        }
+
+        const chapters = this.readerModeState.currentBook.chapters;
+        const currentChapterPath = this.readerModeState.currentChapter.path;
+        const currentIndex = chapters.findIndex(ch => ch.path === currentChapterPath);
+
+        if (currentIndex === -1) {
+            return null;
+        }
+
+        let totalPagesBeforeCurrent = 0;
+        let totalBookPages = 0;
+
+        // Calculate pages for all chapters
+        for (let i = 0; i < chapters.length; i++) {
+            const chapter = chapters[i];
+
+            try {
+                let chapterPages = 0;
+
+                // If this is the current chapter, use existing pagination data
+                if (i === currentIndex) {
+                    chapterPages = this.readerModeState.paginationData.totalPages;
+                } else {
+                    // Calculate pages for other chapters
+                    const content = await this.app.vault.cachedRead(chapter);
+                    const htmlContent = await this.convertMarkdownToHtml(content);
+
+                    // Calculate viewport and typography parameters
+                    const viewport = this.calculateViewportParameters();
+                    const typography = this.calculateTypographyParameters();
+
+                    // Calculate pagination for this chapter
+                    const paginationData = await this.paginationEngine.calculatePagination(
+                        htmlContent,
+                        viewport,
+                        typography
+                    );
+                    chapterPages = paginationData.totalPages;
+                }
+
+                if (i < currentIndex) {
+                    totalPagesBeforeCurrent += chapterPages;
+                }
+                totalBookPages += chapterPages;
+            } catch (error) {
+                console.warn(`Failed to calculate pages for chapter: ${chapter.path}`, error);
+                // Fallback: estimate 1 page per chapter we can't calculate
+                if (i < currentIndex) {
+                    totalPagesBeforeCurrent += 1;
+                }
+                totalBookPages += 1;
+            }
+        }
+
+        const bookCurrentPage = totalPagesBeforeCurrent + this.readerModeState.paginationData.currentPage + 1; // +1 for 1-based indexing
+
+        return {
+            bookCurrentPage,
+            bookTotalPages: totalBookPages
+        };
+    }
+
+    private async updatePageDisplay(): Promise<void> {
         if (!this.readerModeState.paginationData) return;
 
         const { currentPage, totalPages } = this.readerModeState.paginationData;
@@ -1968,16 +2089,18 @@ export default class ObsidianRPlugin extends Plugin {
         }
 
         // Always show bottom margin indicator with appropriate content
-        this.showBottomMarginPageIndicator();
+        await this.showBottomMarginPageIndicator();
 
         // Update title with pages remaining if controls are visible
         const titleElement = document.querySelector('.view-header-title') as HTMLElement;
         if (titleElement && titleElement.getAttribute('data-original-title')) {
+            const originalTitle = titleElement.getAttribute('data-original-title') || '';
             const pagesRemaining = totalPages - currentPage - 1;
-            const remainingText = pagesRemaining === 0 ? 'Last page' : 
-                                 pagesRemaining === 1 ? '1 page left' : 
-                                 `${pagesRemaining} pages left`;
-            titleElement.textContent = remainingText;
+            const remainingText = pagesRemaining === 0 ? 'Last page' :
+                pagesRemaining === 1 ? '1 page left' :
+                    `${pagesRemaining} pages left`;
+            // Include both original title and pages remaining
+            titleElement.textContent = `${originalTitle} - ${remainingText}`;
         }
 
         // Update window title to show pages remaining
@@ -2272,7 +2395,7 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Clean up bottom margin indicator
         this.hideBottomMarginPageIndicator();
-        
+
         // Remove CSS custom property
         document.documentElement.style.removeProperty('--obsidian-r-header-height');
 
@@ -2850,8 +2973,8 @@ export default class ObsidianRPlugin extends Plugin {
         this.controlsEl.classList.add('visible');
 
         // Update bottom margin page indicator to show current/total format when controls are visible
-        this.showBottomMarginPageIndicator();
-        
+        this.showBottomMarginPageIndicator().catch(console.error);
+
         // Update title to show pages remaining when controls are displayed
         this.updateTitleWithPagesRemaining();
 
@@ -2898,13 +3021,13 @@ export default class ObsidianRPlugin extends Plugin {
         if (!this.controlsEl) return;
 
         this.controlsEl.classList.remove('visible');
-        
+
         // Update bottom margin page indicator to show only current page when controls are hidden
-        this.showBottomMarginPageIndicator();
-        
+        this.showBottomMarginPageIndicator().catch(console.error);
+
         // Restore original title when controls are hidden
         this.restoreOriginalTitle();
-        
+
         setTimeout(() => {
             if (this.controlsEl) {
                 this.controlsEl.style.display = 'none';
@@ -2915,41 +3038,54 @@ export default class ObsidianRPlugin extends Plugin {
     /**
      * Shows the bottom margin page indicator (matches view-header-title-container height)
      */
-    private showBottomMarginPageIndicator(): void {
+    private async showBottomMarginPageIndicator(): Promise<void> {
         // Remove existing indicator if present
         this.hideBottomMarginPageIndicator();
-        
+
         if (!this.readerModeState.paginationData) return;
-        
+
         const { currentPage, totalPages } = this.readerModeState.paginationData;
-        
+
         // Get the height of view-header-title-container
         const titleContainer = document.querySelector('.view-header-title-container') as HTMLElement;
         const titleHeight = titleContainer ? titleContainer.offsetHeight : 30; // fallback to 30px
-        
+
         // Set CSS custom property for the header height so it can be used in styles
         document.documentElement.style.setProperty('--obsidian-r-header-height', `${titleHeight}px`);
-        
+
         // Get the current active tab container instead of using fixed positioning
         const workspaceLeaf = this.app.workspace.activeLeaf;
         if (!workspaceLeaf?.view?.containerEl) return;
-        
+
         const tabContainer = workspaceLeaf.view.containerEl;
-        
+
         // Determine if controls are currently visible
         const controlsVisible = this.controlsEl && this.controlsEl.classList.contains('visible');
-        
+
         // Create the bottom margin indicator within the current tab
         const indicator = document.createElement('div');
         indicator.className = 'obsidian-r-bottom-margin-indicator';
-        
+
         // Show different content based on controls visibility
         if (controlsVisible) {
-            indicator.textContent = `${currentPage + 1} / ${totalPages}`;
+            // Try to get book-wide page numbers when controls are visible
+            try {
+                const bookNumbers = await this.calculateBookWidePageNumbers();
+                if (bookNumbers) {
+                    indicator.textContent = `${bookNumbers.bookCurrentPage} / ${bookNumbers.bookTotalPages}`;
+                } else {
+                    // Fallback to chapter numbers if book calculation fails
+                    indicator.textContent = `${currentPage + 1} / ${totalPages}`;
+                }
+            } catch (error) {
+                console.warn('Failed to calculate book-wide page numbers:', error);
+                // Fallback to chapter numbers
+                indicator.textContent = `${currentPage + 1} / ${totalPages}`;
+            }
         } else {
             indicator.textContent = `${currentPage + 1}`;
         }
-        
+
         // Match view-header-title-container styling
         const headerStyle = window.getComputedStyle(titleContainer);
         indicator.style.cssText = `
@@ -2970,10 +3106,10 @@ export default class ObsidianRPlugin extends Plugin {
             z-index: 2001;
             pointer-events: none;
         `;
-        
+
         // Ensure the tab container has relative positioning
         tabContainer.style.position = 'relative';
-        
+
         // Add to the current tab container
         tabContainer.appendChild(indicator);
         console.log(`📄 Bottom margin indicator shown in current tab: ${indicator.textContent}, height: ${titleHeight}px`);
@@ -2993,7 +3129,7 @@ export default class ObsidianRPlugin extends Plugin {
                 return;
             }
         }
-        
+
         // Fallback: check all tab containers and document body for any remaining indicators
         const indicators = document.querySelectorAll('.obsidian-r-bottom-margin-indicator');
         if (indicators.length > 0) {
@@ -3007,24 +3143,24 @@ export default class ObsidianRPlugin extends Plugin {
      */
     private updateTitleWithPagesRemaining(): void {
         if (!this.readerModeState.paginationData) return;
-        
+
         const { currentPage, totalPages } = this.readerModeState.paginationData;
         const pagesRemaining = totalPages - currentPage - 1; // -1 because currentPage is 0-indexed
-        
+
         const titleElement = document.querySelector('.view-header-title') as HTMLElement;
         if (!titleElement) return;
-        
+
         // Store original title if not already stored
         if (!titleElement.getAttribute('data-original-title')) {
             titleElement.setAttribute('data-original-title', titleElement.textContent || '');
         }
-        
+
         // Get original title and append pages remaining
         const originalTitle = titleElement.getAttribute('data-original-title') || '';
-        const remainingText = pagesRemaining === 0 ? 'Last page' : 
-                             pagesRemaining === 1 ? '1 page left' : 
-                             `${pagesRemaining} pages left`;
-        
+        const remainingText = pagesRemaining === 0 ? 'Last page' :
+            pagesRemaining === 1 ? '1 page left' :
+                `${pagesRemaining} pages left`;
+
         titleElement.textContent = `${originalTitle} - ${remainingText}`;
         console.log(`📄 Title updated: ${originalTitle} - ${remainingText}`);
     }
@@ -3035,7 +3171,7 @@ export default class ObsidianRPlugin extends Plugin {
     private restoreOriginalTitle(): void {
         const titleElement = document.querySelector('.view-header-title') as HTMLElement;
         if (!titleElement) return;
-        
+
         const originalTitle = titleElement.getAttribute('data-original-title');
         if (originalTitle) {
             titleElement.textContent = originalTitle;
@@ -3133,7 +3269,7 @@ export default class ObsidianRPlugin extends Plugin {
             if (this.controlsEl) {
                 this.updateZenIcon();
             }
-            
+
             // Recalculate pagination if reader mode is active, since zen mode changes layout
             if (this.readerModeState.isActive) {
                 await this.recalculatePagination();
@@ -3425,9 +3561,8 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Try to maintain reading position
         if (this.readerModeState.paginationData && currentPage < this.readerModeState.paginationData.totalPages) {
-            this.applyPageTransition(); // Set up transitions before navigation
-            await this.paginationEngine.navigateToPage(this.readerModeState.paginationData, currentPage);
-            this.updatePageDisplay();
+            await this.paginationEngine.navigateToPage(this.readerModeState.paginationData, currentPage, this.settings.transitionType);
+            await this.updatePageDisplay();
         }
     }
 

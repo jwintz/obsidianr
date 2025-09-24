@@ -15,7 +15,7 @@
     height: auto !important; /* Let content be as tall as needed */
     min-height: 100% !important; /* At least fill viewport */
     max-height: none !important; /* No height constraint */
-    transition: transform 0.3s ease-in-out !important;
+    /* Transition will be set by JavaScript based on user settings */
 }
 
 /* Ensure content elements don't break out of pagination width but can be tall */
