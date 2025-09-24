@@ -1,5 +1,42 @@
 /* Obsidian:R Reader Mode Styles */
 
+/* Pagination viewport styles */
+.pagination-viewport {
+    position: relative !important;
+    overflow: hidden !important;
+    border: 2px dashed var(--background-modifier-border) !important; /* Debug border */
+}
+
+.pagination-content {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: auto !important; /* Let content be as tall as needed */
+    min-height: 100% !important; /* At least fill viewport */
+    max-height: none !important; /* No height constraint */
+    transition: transform 0.3s ease-in-out !important;
+}
+
+/* Ensure content elements don't break out of pagination width but can be tall */
+.pagination-viewport * {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+/* Ensure paragraphs and other content elements aren't height-constrained */
+.pagination-content p,
+.pagination-content div,
+.pagination-content h1,
+.pagination-content h2,
+.pagination-content h3,
+.pagination-content h4,
+.pagination-content h5,
+.pagination-content h6 {
+    height: auto !important;
+    max-height: none !important;
+}
+
 /* Icon styles for Lucide icons and fallbacks */
 .obsidian-r-icon-button {
     background: none;
@@ -432,7 +469,7 @@
     transition: transform 0.4s ease-out, opacity 0.4s ease-out;
 }
 
-/* Pagination Layout - NOTE: These styles will disable scrolling if applied */
+/* Pagination Layout - Disabled by default to preserve scrolling */
 .obsidian-r-paginated {
     overflow: hidden !important;
 }
@@ -454,4 +491,71 @@
 /* Content container for smooth transitions */
 .obsidian-r-content-container {
     transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+}
+
+/* Page indicators styling improvements */
+.obsidian-r-top-pill,
+.obsidian-r-bottom-pill {
+    font-family: var(--font-interface) !important;
+    user-select: none;
+    cursor: default;
+    z-index: 2001 !important;
+}
+
+/* Improve pill visibility on all themes */
+.obsidian-r-top-pill {
+    background: rgba(var(--background-primary-rgb), 0.95) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    backdrop-filter: blur(8px) !important;
+    -webkit-backdrop-filter: blur(8px) !important;
+}
+
+.obsidian-r-bottom-pill {
+    background: rgba(var(--background-primary-rgb), 0.95) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    backdrop-filter: blur(8px) !important;
+    -webkit-backdrop-filter: blur(8px) !important;
+}
+
+/* Enhanced mobile responsiveness for pagination */
+@media (max-width: 768px) {
+    .obsidian-r-top-pill,
+    .obsidian-r-bottom-pill {
+        font-size: var(--font-ui-smaller) !important;
+        padding: 6px 12px !important;
+    }
+    
+    .obsidian-r-controls {
+        bottom: 60px !important; /* Adjust for smaller pill height on mobile */
+    }
+}
+
+/* Pagination measurement container (hidden) */
+#obsidian-r-measurement-container {
+    position: absolute !important;
+    left: -9999px !important;
+    top: -9999px !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    overflow: hidden !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    z-index: -1000 !important;
+}
+
+/* Touch feedback for mobile navigation */
+@media (max-width: 768px) {
+    .workspace-leaf.has-obsidian-r-controls {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+    }
+    
+    /* Add subtle visual feedback for touch interactions */
+    .workspace-leaf.has-obsidian-r-controls:active {
+        opacity: 0.95;
+    }
 }

@@ -44,6 +44,68 @@ interface ObsidianRSettings {
     showToc: boolean;
     showBookmarks: boolean;
     showStats: boolean;
+
+    // Reading Positions
+    readingPositions: Record<string, ReadingPosition>; // File path -> reading position
+}
+
+// /////////////////////////////////////////////////////////////////////////////
+// Pagination Interfaces
+// /////////////////////////////////////////////////////////////////////////////
+
+interface ViewportParameters {
+    width: number;
+    height: number;
+    topMargin: number;
+    bottomMargin: number;
+    leftMargin: number;
+    rightMargin: number;
+    columnCount: number;
+    columnGap: number;
+}
+
+interface TypographyParameters {
+    fontFamily: string;
+    fontSize: number;
+    lineHeight: number;
+    letterSpacing: number;
+    wordSpacing: number;
+    textAlign: 'left' | 'right' | 'center' | 'justify';
+}
+
+interface PageBreakRules {
+    respectCSSPageBreaks: boolean;
+    minOrphanLines: number;
+    minWidowLines: number;
+    avoidBreakInsideImages: boolean;
+    avoidBreakInsideTables: boolean;
+}
+
+interface PageBoundary {
+    startOffset: number;
+    endOffset: number;
+    startElement: Element | null;
+    endElement: Element | null;
+    pageIndex: number;
+    contentHeight: number;
+}
+
+interface PaginationData {
+    totalPages: number;
+    currentPage: number;
+    pages: PageBoundary[];
+    viewport: ViewportParameters;
+    typography: TypographyParameters;
+    contentContainer: HTMLElement | null;
+    measurementContainer: HTMLElement | null;
+}
+
+interface ReadingPosition {
+    chapterFile: TFile;
+    pageIndex: number;
+    scrollOffset: number;
+    characterOffset: number;
+    timestamp: number;
 }
 
 // /////////////////////////////////////////////////////////////////////////////
@@ -54,6 +116,8 @@ interface ReaderModeState {
     isActive: boolean;
     currentBook: BookStructure | null;
     currentChapter: TFile | null;
+    paginationData: PaginationData | null;
+    readingPosition: ReadingPosition | null;
 }
 
 // /////////////////////////////////////////////////////////////////////////////
@@ -72,16 +136,502 @@ const DEFAULT_SETTINGS: ObsidianRSettings = {
     fontFamily: 'Charter, "Bitstream Charter", "Sitka Text", Cambria, serif',
     showToc: false,
     showBookmarks: false,
-    showStats: false
+    showStats: false,
+    readingPositions: {}
 };
 
 // /////////////////////////////////////////////////////////////////////////////
-// 
+// Pagination Engine
 // /////////////////////////////////////////////////////////////////////////////
 
 /**
- * Font management utility for loading fonts from CDN
+ * Core pagination engine that handles content measurement, page calculation, and position tracking
  */
+class PaginationEngine {
+    private app: App;
+    private measurementContainer: HTMLElement | null = null;
+    private cachedPagination: Map<string, PaginationData> = new Map();
+
+    // Viewport elements for true pagination
+    private paginationViewport?: HTMLElement;
+    private paginationContent?: HTMLElement;
+
+    constructor(app: App) {
+        this.app = app;
+        this.createMeasurementContainer();
+    }
+
+    /**
+     * Creates an off-screen container for measuring content
+     */
+    private createMeasurementContainer(): void {
+        this.measurementContainer = document.createElement('div');
+        this.measurementContainer.id = 'obsidian-r-measurement-container';
+        this.measurementContainer.style.cssText = `
+            position: absolute;
+            left: -9999px;
+            top: -9999px;
+            visibility: hidden;
+            pointer-events: none;
+            overflow: hidden;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        `;
+        document.body.appendChild(this.measurementContainer);
+    }
+
+    /**
+     * Creates a paginated viewport for content display
+     */
+    createPaginationViewport(contentEl: HTMLElement, availableHeight: number): HTMLElement {
+        // Create a wrapper that constrains height and hides overflow
+        const viewport = contentEl.createDiv({ cls: 'pagination-viewport' });
+
+        // Set the height to available page height and hide overflow
+        viewport.style.height = `${availableHeight}px`;
+        viewport.style.overflow = 'hidden';
+        viewport.style.position = 'relative';
+
+        // Create inner content container that we'll transform
+        const contentContainer = viewport.createDiv({ cls: 'pagination-content' });
+        contentContainer.style.position = 'absolute';
+        contentContainer.style.top = '0';
+        contentContainer.style.left = '0';
+        contentContainer.style.width = '100%';
+        contentContainer.style.transition = 'transform 0.3s ease-in-out';
+
+        // Move all existing content into the container
+        while (contentEl.firstChild && contentEl.firstChild !== viewport) {
+            contentContainer.appendChild(contentEl.firstChild);
+        }
+
+        // Store references for later use
+        this.paginationViewport = viewport;
+        this.paginationContent = contentContainer;
+
+        console.log(`📺 Created pagination viewport: ${availableHeight}px height`);
+        return viewport;
+    }
+
+    /**
+     * Calculates pagination for given content and parameters
+     */
+    async calculatePagination(
+        content: string,
+        viewport: ViewportParameters,
+        typography: TypographyParameters,
+        breakRules: PageBreakRules = this.getDefaultBreakRules()
+    ): Promise<PaginationData> {
+        const cacheKey = this.generateCacheKey(content, viewport, typography, breakRules);
+        const cached = this.cachedPagination.get(cacheKey);
+        if (cached) {
+            return cached;
+        }
+
+        if (!this.measurementContainer) {
+            this.createMeasurementContainer();
+        }
+
+        const paginationData = await this.performPagination(content, viewport, typography, breakRules);
+        this.cachedPagination.set(cacheKey, paginationData);
+
+        // Limit cache size to prevent memory issues
+        if (this.cachedPagination.size > 50) {
+            const firstKey = this.cachedPagination.keys().next().value;
+            this.cachedPagination.delete(firstKey);
+        }
+
+        return paginationData;
+    }
+
+    /**
+     * Performs the actual pagination calculation
+     */
+    private async performPagination(
+        content: string,
+        viewport: ViewportParameters,
+        typography: TypographyParameters,
+        breakRules: PageBreakRules
+    ): Promise<PaginationData> {
+        console.log('🔍 Starting pagination calculation...');
+
+        // Set up measurement container with exact typography and viewport settings
+        this.setupMeasurementContainer(viewport, typography);
+
+        // Parse and render content with proper encoding handling
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = content;
+        // Ensure proper text rendering for French and special characters
+        tempDiv.style.cssText = `
+            font-variant-ligatures: common-ligatures;
+            text-rendering: optimizeLegibility;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        `;
+        this.measurementContainer!.appendChild(tempDiv);
+
+        // Calculate available page height
+        const availableHeight = viewport.height - viewport.topMargin - viewport.bottomMargin;
+        console.log('📏 Available height for pagination:', availableHeight, 'px');
+
+        // Measure total content height
+        const totalHeight = this.measureContentHeight(tempDiv);
+        console.log('📏 Total content height:', totalHeight, 'px');
+
+        // Calculate page boundaries
+        const pages = await this.calculatePageBoundaries(tempDiv, availableHeight, breakRules);
+        console.log('📄 Calculated pages:', pages.length);
+
+        // Clean up
+        this.measurementContainer!.removeChild(tempDiv);
+
+        const paginationData: PaginationData = {
+            totalPages: pages.length,
+            currentPage: 0,
+            pages,
+            viewport,
+            typography,
+            contentContainer: null,
+            measurementContainer: this.measurementContainer
+        };
+
+        return paginationData;
+    }
+
+    /**
+     * Sets up the measurement container with exact typography and viewport settings
+     */
+    private setupMeasurementContainer(viewport: ViewportParameters, typography: TypographyParameters): void {
+        if (!this.measurementContainer) return;
+
+        const contentWidth = viewport.width - viewport.leftMargin - viewport.rightMargin;
+        const columnWidth = viewport.columnCount > 1
+            ? (contentWidth - (viewport.columnGap * (viewport.columnCount - 1))) / viewport.columnCount
+            : contentWidth;
+
+        this.measurementContainer.style.cssText += `
+            width: ${contentWidth}px;
+            max-width: ${contentWidth}px;
+            font-family: ${typography.fontFamily};
+            font-size: ${typography.fontSize}px;
+            line-height: ${typography.lineHeight};
+            letter-spacing: ${typography.letterSpacing}em;
+            word-spacing: ${typography.wordSpacing === 0 ? 'normal' : typography.wordSpacing + 'em'};
+            text-align: ${typography.textAlign};
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            hyphens: auto;
+            ${viewport.columnCount > 1 ? `
+                column-count: ${viewport.columnCount};
+                column-gap: ${viewport.columnGap}px;
+                column-width: ${columnWidth}px;
+            ` : ''}
+        `;
+
+        console.log(`📐 Setup measurement container: ${contentWidth}px width, font: ${typography.fontFamily} ${typography.fontSize}px`);
+    }
+
+    /**
+     * Measures the total height of rendered content
+     */
+    private measureContentHeight(contentEl: HTMLElement): number {
+        // Force layout and get accurate measurement of the complete content
+        contentEl.style.display = 'block';
+        contentEl.style.visibility = 'visible';
+        contentEl.style.position = 'static';
+
+        // Force browser to calculate layout
+        contentEl.offsetHeight; // Trigger reflow
+
+        const rect = contentEl.getBoundingClientRect();
+        const computedHeight = rect.height;
+
+        console.log(`📏 Measured content height: ${computedHeight}px (from complete vault content)`);
+        return computedHeight;
+    }
+
+    /**
+     * Calculates page boundaries based on available height and break rules
+     */
+    private async calculatePageBoundaries(
+        contentEl: HTMLElement,
+        availableHeight: number,
+        breakRules: PageBreakRules
+    ): Promise<PageBoundary[]> {
+        console.log(`📏 Calculating pages for available height: ${availableHeight}px`);
+
+        // Get the total content height
+        const totalHeight = this.measureContentHeight(contentEl);
+        console.log(`📏 Total content height: ${totalHeight}px`);
+
+        // Calculate how many pages we need based on simple division
+        const pagesNeeded = Math.ceil(totalHeight / availableHeight);
+        console.log(`📄 Pages needed: ${pagesNeeded} (${totalHeight}px ÷ ${availableHeight}px = ${totalHeight / availableHeight})`);
+
+        // Ensure we have at least 1 page
+        const finalPages = Math.max(1, pagesNeeded);
+        console.log(`📄 Final pages: ${finalPages}`);
+
+        const pages: PageBoundary[] = [];
+
+        // Create page boundaries based on height divisions
+        for (let i = 0; i < finalPages; i++) {
+            const startOffset = i * availableHeight;
+            const endOffset = Math.min((i + 1) * availableHeight, totalHeight);
+
+            pages.push({
+                startOffset: startOffset,
+                endOffset: endOffset,
+                startElement: contentEl.firstElementChild, // Simplified - all pages share same start element
+                endElement: contentEl.lastElementChild,
+                pageIndex: i,
+                contentHeight: availableHeight
+            });
+
+            console.log(`📄 Page ${i + 1}: ${startOffset}px - ${endOffset}px`);
+        }
+
+        return pages.length > 0 ? pages : [{
+            startOffset: 0,
+            endOffset: totalHeight,
+            startElement: contentEl.firstElementChild,
+            endElement: contentEl.lastElementChild,
+            pageIndex: 0,
+            contentHeight: totalHeight
+        }];
+    }
+
+    /**
+     * Gets all text-containing elements for pagination calculation
+     */
+    private getAllTextElements(container: HTMLElement): Element[] {
+        const elements: Element[] = [];
+        const walker = document.createTreeWalker(
+            container,
+            NodeFilter.SHOW_ELEMENT,
+            {
+                acceptNode: (node: Element) => {
+                    // Include paragraphs, headings, list items, and other text containers
+                    const tagName = node.tagName.toLowerCase();
+                    if (['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote', 'pre'].includes(tagName)) {
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                    return NodeFilter.FILTER_SKIP;
+                }
+            }
+        );
+
+        let node: Element | null;
+        while (node = walker.nextNode() as Element) {
+            elements.push(node);
+        }
+
+        return elements;
+    }
+
+    /**
+     * Measures the height of a single element
+     */
+    private measureElementHeight(element: Element): number {
+        // Create a temporary element with the same content and styling
+        const tempEl = element.cloneNode(true) as HTMLElement;
+        tempEl.style.visibility = 'hidden';
+        tempEl.style.position = 'absolute';
+        tempEl.style.left = '-9999px';
+
+        this.measurementContainer!.appendChild(tempEl);
+        const height = tempEl.getBoundingClientRect().height;
+        this.measurementContainer!.removeChild(tempEl);
+
+        return height;
+    }
+
+    /**
+     * Gets the character offset of an element within the content
+     */
+    private getElementOffset(element: Element): number {
+        // Find the root container to calculate offset from
+        const rootContainer = this.measurementContainer?.querySelector('div');
+        if (!rootContainer) return 0;
+
+        // Use TreeWalker to calculate character position
+        let offset = 0;
+        const walker = document.createTreeWalker(
+            rootContainer,
+            NodeFilter.SHOW_TEXT,
+            null
+        );
+
+        let currentNode: Node | null;
+        while (currentNode = walker.nextNode()) {
+            // Check if we've reached our target element
+            if (currentNode.parentElement === element || element.contains(currentNode.parentElement!)) {
+                break;
+            }
+            // Add text length of this node
+            offset += currentNode.textContent?.length || 0;
+        }
+
+        return offset;
+    }
+
+    /**
+     * Calculates character position for a given page
+     */
+    calculateCharacterPosition(pageIndex: number, paginationData: PaginationData): number {
+        if (pageIndex >= paginationData.pages.length) {
+            return 0;
+        }
+        return paginationData.pages[pageIndex].startOffset;
+    }
+
+    /**
+     * Finds the page containing a specific character position
+     */
+    findPageForCharacterPosition(characterPosition: number, paginationData: PaginationData): number {
+        for (let i = 0; i < paginationData.pages.length; i++) {
+            const page = paginationData.pages[i];
+            if (characterPosition >= page.startOffset && characterPosition <= page.endOffset) {
+                return i;
+            }
+        }
+        return 0; // Default to first page
+    }
+
+    /**
+     * Generates a cache key for pagination data
+     */
+    private generateCacheKey(
+        content: string,
+        viewport: ViewportParameters,
+        typography: TypographyParameters,
+        breakRules: PageBreakRules
+    ): string {
+        const contentHash = this.simpleHash(content);
+        return `${contentHash}-${viewport.width}x${viewport.height}-${typography.fontSize}-${typography.fontFamily}`;
+    }
+
+    /**
+     * Simple hash function for cache keys
+     */
+    private simpleHash(str: string): string {
+        let hash = 0;
+        if (str.length === 0) return hash.toString();
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32-bit integer
+        }
+        return Math.abs(hash).toString(16);
+    }
+
+    /**
+     * Gets default page break rules
+     */
+    private getDefaultBreakRules(): PageBreakRules {
+        return {
+            respectCSSPageBreaks: true,
+            minOrphanLines: 2,
+            minWidowLines: 2,
+            avoidBreakInsideImages: true,
+            avoidBreakInsideTables: true
+        };
+    }
+
+    /**
+     * Navigates to a specific page in the paginated content
+     */
+    async navigateToPage(paginationData: PaginationData, pageIndex: number): Promise<boolean> {
+        console.log(`🎯 Navigate to page ${pageIndex + 1}/${paginationData.totalPages}`);
+
+        if (!paginationData.contentContainer || pageIndex < 0 || pageIndex >= paginationData.totalPages) {
+            console.log('❌ Invalid navigation parameters');
+            return false;
+        }
+
+        const targetPage = paginationData.pages[pageIndex];
+        if (!targetPage) {
+            console.log('❌ Target page not found');
+            return false;
+        }
+
+        // REAL PAGINATION: Use transform to show only the target page
+        const container = paginationData.contentContainer;
+        const pageHeight = paginationData.viewport.height - paginationData.viewport.topMargin - paginationData.viewport.bottomMargin;
+
+        // Calculate the Y offset to show this page
+        const offsetY = -(pageIndex * pageHeight);
+
+        console.log(`📐 Moving content by ${offsetY}px (page height: ${pageHeight}px)`);
+
+        // Apply the transform to show only this page
+        container.style.transform = `translateY(${offsetY}px)`;
+        container.style.transition = 'transform 0.3s ease-in-out';
+
+        // Ensure the container has pagination constraints
+        this.enablePaginationMode(container, pageHeight);
+
+        paginationData.currentPage = pageIndex;
+        console.log(`✅ Navigated to page ${pageIndex + 1}`);
+        return true;
+    }
+
+    /**
+     * Enables pagination mode by constraining the viewport
+     */
+    enablePaginationMode(container: HTMLElement, pageHeight: number): void {
+        const parent = container.parentElement;
+        if (!parent) {
+            console.error('❌ No parent element found for content container');
+            return;
+        }
+
+        console.log(`🔧 Enabling pagination mode: ${pageHeight}px page height`);
+
+        // Set up the pagination viewport on the parent - THIS constrains what's visible
+        parent.style.height = `${pageHeight}px`;
+        parent.style.overflow = 'hidden';
+        parent.style.position = 'relative';
+        parent.classList.add('pagination-viewport');
+
+        // CRITICAL: The content container must NOT be height-constrained
+        // It needs to contain ALL content, but positioned via transforms
+        container.style.position = 'absolute';
+        container.style.top = '0';
+        container.style.left = '0';
+        container.style.width = '100%';
+        container.style.height = 'auto'; // Let it be as tall as the content needs
+        container.style.minHeight = '100%'; // At least fill the viewport
+        container.style.maxHeight = 'none'; // No maximum height constraint
+        container.style.transition = 'transform 0.3s ease-in-out';
+        container.classList.add('pagination-content');
+
+        console.log(`✅ Pagination viewport enabled: viewport = ${pageHeight}px, content = unconstrained`);
+    }
+
+    /**
+     * Clears the pagination cache
+     */
+    clearCache(): void {
+        this.cachedPagination.clear();
+    }
+
+    /**
+     * Cleanup method to remove measurement container
+     */
+    destroy(): void {
+        if (this.measurementContainer) {
+            document.body.removeChild(this.measurementContainer);
+            this.measurementContainer = null;
+        }
+        this.clearCache();
+    }
+}
+
+// /////////////////////////////////////////////////////////////////////////////
+// Font management utility for loading fonts from CDN
+// /////////////////////////////////////////////////////////////////////////////
 class FontManager {
     private static fontsLoaded = false;
     private static fontLoadPromise: Promise<void> | null = null;
@@ -378,7 +928,9 @@ export default class ObsidianRPlugin extends Plugin {
     private readerModeState: ReaderModeState = {
         isActive: false,
         currentBook: null,
-        currentChapter: null
+        currentChapter: null,
+        paginationData: null,
+        readingPosition: null
     };
     private originalContentBackup: string | null = null; // Store original content before any modifications
     private readerModeEl: HTMLElement | null = null;
@@ -388,8 +940,11 @@ export default class ObsidianRPlugin extends Plugin {
     private readerKeyboardHandler: ((event: KeyboardEvent) => void) | null = null;
     private zenMode: boolean = false;
     private originalViewMode: 'source' | 'preview' | null = null;
+    private paginationEngine: PaginationEngine;
 
     async onload() {
+        // Initialize pagination engine
+        this.paginationEngine = new PaginationEngine(this.app);
         // Load settings
         await this.loadSettings();
 
@@ -461,6 +1016,11 @@ export default class ObsidianRPlugin extends Plugin {
         }
         this.detectedBooks.clear();
         this.exitReaderMode();
+
+        // Clean up pagination engine
+        if (this.paginationEngine) {
+            this.paginationEngine.destroy();
+        }
     }
 
     /**
@@ -806,19 +1366,27 @@ export default class ObsidianRPlugin extends Plugin {
             return;
         }
 
-        // Check if the current file is part of a book
-        const book = this.findBookForFile(activeFile);
-        if (!book) {
-            new Notice('Current file is not part of a detected book');
+        // Check if it's a markdown file
+        if (activeFile.extension !== 'md') {
+            new Notice('Reader mode only works with Markdown files');
             return;
         }
 
+        // Check if the current file is part of a book (preferred)
+        const book = this.findBookForFile(activeFile);
+
+        // If no book detected, create a minimal book structure for this single file
+        const effectiveBook = book || this.createSingleFileBook(activeFile);
+
         this.readerModeState.isActive = true;
-        this.readerModeState.currentBook = book;
+        this.readerModeState.currentBook = effectiveBook;
         this.readerModeState.currentChapter = activeFile;
 
         // Switch to reading view for better reading experience
         await this.switchToReadingView();
+
+        // Initialize pagination for the current chapter
+        await this.initializePagination();
 
         // Apply visual styling to content area immediately after view switch
         this.applyReaderModeStyles();
@@ -830,7 +1398,591 @@ export default class ObsidianRPlugin extends Plugin {
         // Add reader mode keyboard handlers
         this.addReaderModeKeyboardHandlers();
 
+        // Add mobile touch handlers
+        this.addMobileTouchHandlers();
+
+        // Add window resize handler for pagination recalculation
+        this.addWindowResizeHandler();
+
         new Notice('Reader mode activated');
+    }
+
+    /**
+     * Converts Markdown content to HTML for accurate measurement
+     */
+    private async convertMarkdownToHtml(markdown: string): Promise<string> {
+        try {
+            console.log('🔄 Converting complete markdown content to HTML for pagination');
+
+            // ALWAYS use the complete markdown content from vault, never DOM content
+            // This ensures we measure the complete content, not lazy-loaded portions
+
+            // Remove YAML frontmatter if present
+            let content = markdown.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, '');
+
+            // First, handle code blocks to prevent them from being processed by other rules
+            const codeBlocks: string[] = [];
+            content = content.replace(/```[\s\S]*?```/gm, (match) => {
+                const placeholder = `__CODEBLOCK_${codeBlocks.length}__`;
+                codeBlocks.push(`<pre><code>${match.slice(3, -3).trim()}</code></pre>`);
+                return placeholder;
+            });
+
+            // Process other markdown elements
+            let html = content
+                // Headers (with proper hierarchy)
+                .replace(/^#### (.*$)/gim, '<h4>$1</h4>')
+                .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+                .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+                .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+                // Bold and italic (handle nested cases)
+                .replace(/\*\*\*(.*?)\*\*\*/gim, '<strong><em>$1</em></strong>')
+                .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+                .replace(/\_\_(.*?)\_\_/gim, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+                .replace(/\_(.*?)\_/gim, '<em>$1</em>')
+                // Inline code
+                .replace(/`([^`]+)`/gim, '<code>$1</code>')
+                // Links
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/gim, '<a href="$2">$1</a>')
+                // Horizontal rules
+                .replace(/^---+$/gim, '<hr>')
+                .replace(/^\*\*\*+$/gim, '<hr>')
+                // Blockquotes
+                .replace(/^> (.*)$/gim, '<blockquote>$1</blockquote>');
+
+            // Handle lists and paragraphs - split by double newlines for paragraphs
+            const paragraphs = html.split(/\n\s*\n/).map(para => para.trim()).filter(para => para.length > 0);
+
+            const processedParagraphs: string[] = [];
+
+            for (const paragraph of paragraphs) {
+                const lines = paragraph.split('\n');
+                const processedLines: string[] = [];
+                let inList = false;
+                let listType = '';
+
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+
+                    if (!trimmedLine) continue;
+
+                    // Unordered list item
+                    if (trimmedLine.match(/^\s*[\*\-\+]\s+/)) {
+                        if (!inList || listType !== 'ul') {
+                            if (inList) processedLines.push(`</${listType}>`);
+                            processedLines.push('<ul>');
+                            inList = true;
+                            listType = 'ul';
+                        }
+                        processedLines.push(`<li>${trimmedLine.replace(/^\s*[\*\-\+]\s+/, '')}</li>`);
+                    }
+                    // Ordered list item
+                    else if (trimmedLine.match(/^\s*\d+\.\s+/)) {
+                        if (!inList || listType !== 'ol') {
+                            if (inList) processedLines.push(`</${listType}>`);
+                            processedLines.push('<ol>');
+                            inList = true;
+                            listType = 'ol';
+                        }
+                        processedLines.push(`<li>${trimmedLine.replace(/^\s*\d+\.\s+/, '')}</li>`);
+                    }
+                    // Regular content
+                    else {
+                        if (inList) {
+                            processedLines.push(`</${listType}>`);
+                            inList = false;
+                        }
+                        processedLines.push(trimmedLine);
+                    }
+                }
+
+                // Close any remaining list
+                if (inList) {
+                    processedLines.push(`</${listType}>`);
+                }
+
+                let processedParagraph = processedLines.join('\n');
+
+                // Don't wrap block elements in paragraphs
+                if (processedParagraph.match(/^<(h[1-6]|ul|ol|pre|blockquote|hr)/i)) {
+                    processedParagraphs.push(processedParagraph);
+                } else {
+                    // Handle long text lines - add soft breaks at sentence boundaries for better wrapping
+                    processedParagraph = processedParagraph
+                        .replace(/\.\s+([A-ZÀÂÄÇÉÈÊËÏÎÔÙÛÜŸ])/g, '. <wbr>$1') // French capital letters
+                        .replace(/\?\s+([A-ZÀÂÄÇÉÈÊËÏÎÔÙÛÜŸ])/g, '? <wbr>$1')
+                        .replace(/!\s+([A-ZÀÂÄÇÉÈÊËÏÎÔÙÛÜŸ])/g, '! <wbr>$1')
+                        .replace(/»\s+([A-ZÀÂÄÇÉÈÊËÏÎÔÙÛÜŸ])/g, '» <wbr>$1')
+                        .replace(/"\s+([A-ZÀÂÄÇÉÈÊËÏÎÔÙÛÜŸ])/g, '" <wbr>$1');
+
+                    processedParagraphs.push(`<p>${processedParagraph}</p>`);
+                }
+            }
+
+            html = processedParagraphs.join('\n');
+
+            // Restore code blocks
+            codeBlocks.forEach((block, index) => {
+                html = html.replace(`__CODEBLOCK_${index}__`, block);
+            });
+
+            console.log('✅ Converted complete markdown to HTML with proper text wrapping');
+            console.log(`📊 Generated ${html.length} characters of HTML from ${markdown.length} characters of markdown`);
+            return html;
+        } catch (error) {
+            console.error('Failed to convert markdown to HTML:', error);
+            // Return the original markdown wrapped in paragraphs as last resort
+            return `<p>${markdown.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
+        }
+    }
+
+    /**
+     * Initializes pagination for the current chapter content
+     */
+    private async initializePagination(): Promise<void> {
+        if (!this.readerModeState.currentChapter || !this.paginationEngine) {
+            console.log('❌ Cannot initialize pagination: missing chapter or engine');
+            return;
+        }
+
+        try {
+            console.log('🔧 Initializing pagination for:', this.readerModeState.currentChapter.path);
+
+            // Get the content of the current chapter
+            const content = await this.app.vault.cachedRead(this.readerModeState.currentChapter);
+            console.log('📄 Complete content from vault:', content.length, 'characters');
+            console.log('📄 Content lines count:', content.split('\n').length);
+            console.log('📄 First 200 chars:', content.substring(0, 200) + '...');
+            console.log('📄 Last 200 chars:', '...' + content.substring(content.length - 200));
+
+            // Convert Markdown to HTML for accurate measurement
+            const htmlContent = await this.convertMarkdownToHtml(content);
+            console.log('🔄 Converted to HTML, length:', htmlContent.length);
+            console.log('🔄 HTML paragraphs count:', (htmlContent.match(/<p>/g) || []).length);
+            console.log('🔄 HTML preview:', htmlContent.substring(0, 300) + '...');
+
+            // Calculate viewport parameters
+            const viewport = this.calculateViewportParameters();
+            console.log('📐 Viewport:', viewport);
+
+            // Calculate typography parameters 
+            const typography = this.calculateTypographyParameters();
+            console.log('🔤 Typography:', typography);
+
+            // Calculate pagination using HTML content
+            const paginationData = await this.paginationEngine.calculatePagination(
+                htmlContent,
+                viewport,
+                typography
+            );
+
+            console.log('📚 Pagination calculated:', paginationData.totalPages, 'pages');
+
+            // Store pagination data
+            this.readerModeState.paginationData = paginationData;
+
+            // Update the content container reference
+            const activeLeaf = this.app.workspace.activeLeaf;
+            if (activeLeaf?.view?.containerEl) {
+                const contentContainer = activeLeaf.view.containerEl.querySelector('.markdown-preview-sizer') as HTMLElement ||
+                    activeLeaf.view.containerEl.querySelector('.cm-content') as HTMLElement;
+                if (contentContainer) {
+                    paginationData.contentContainer = contentContainer;
+                    console.log('✅ Found content container:', contentContainer.className);
+
+                    // IMMEDIATELY apply pagination viewport constraints
+                    const pageHeight = viewport.height - viewport.topMargin - viewport.bottomMargin;
+                    console.log(`🔧 Applying pagination constraints: ${pageHeight}px per page`);
+
+                    // CRITICAL: Ensure the DOM container has the complete content
+                    // Obsidian might be lazy-loading, so we need to inject the full HTML
+                    this.ensureCompleteContentRendered(contentContainer, htmlContent);
+
+                    // Enable pagination mode on the content container
+                    this.paginationEngine.enablePaginationMode(contentContainer, pageHeight);
+
+                    // Navigate to first page to ensure pagination is visible
+                    await this.paginationEngine.navigateToPage(paginationData, 0);
+
+                } else {
+                    console.log('⚠️ No content container found');
+                }
+            }
+
+            // Restore reading position if available
+            await this.restoreReadingPosition();
+
+        } catch (error) {
+            console.error('❌ Failed to initialize pagination:', error);
+        }
+    }
+
+    /**
+     * Calculates viewport parameters based on current window size and settings
+     */
+    private calculateViewportParameters(): ViewportParameters {
+        const windowWidth = window.innerWidth;
+        const windowHeight = window.innerHeight;
+
+        // Calculate margins based purely on settings
+        const horizontalMarginPx = (windowWidth * this.settings.horizontalMargins) / 100;
+
+        // Calculate vertical margins as a proportion of horizontal margins to maintain aspect ratio
+        const verticalMarginPx = horizontalMarginPx * (windowHeight / windowWidth);
+
+        // Calculate space needed for UI elements (proportional to font size)
+        const controlsSpacePx = this.settings.fontSize * 5; // 5x font size for controls
+
+        const params = {
+            width: windowWidth,
+            height: windowHeight,
+            topMargin: verticalMarginPx,
+            bottomMargin: verticalMarginPx + controlsSpacePx,
+            leftMargin: horizontalMarginPx,
+            rightMargin: horizontalMarginPx,
+            columnCount: this.settings.columns,
+            columnGap: this.settings.fontSize // Use font size as column gap base
+        };
+
+        console.log('📐 Calculated viewport parameters (computed from settings):', params);
+        console.log(`📏 Effective page height: ${params.height - params.topMargin - params.bottomMargin}px`);
+        return params;
+    }
+
+    /**
+     * Ensures the DOM container has the complete content from vault, not lazy-loaded content
+     */
+    private ensureCompleteContentRendered(container: HTMLElement, completeHtml: string): void {
+        console.log('🔄 Ensuring complete content is rendered in DOM container');
+
+        // Check if the container has significantly less content than expected
+        const currentContentLength = container.innerHTML.length;
+        const expectedContentLength = completeHtml.length;
+
+        console.log(`📊 Current DOM content: ${currentContentLength} chars, Expected: ${expectedContentLength} chars`);
+
+        // If DOM content is significantly shorter, replace it with complete content
+        if (currentContentLength < expectedContentLength * 0.8) { // Less than 80% of expected
+            console.log('⚠️ DOM content appears incomplete, injecting complete content');
+            container.innerHTML = completeHtml;
+            console.log('✅ Complete content injected into DOM container');
+        } else {
+            console.log('✅ DOM content appears complete');
+        }
+    }
+
+    /**
+     * Calculates typography parameters based on current settings
+     */
+    private calculateTypographyParameters(): TypographyParameters {
+        return {
+            fontFamily: this.settings.fontFamily,
+            fontSize: this.settings.fontSize,
+            lineHeight: this.settings.lineSpacing,
+            letterSpacing: this.settings.characterSpacing,
+            wordSpacing: this.settings.wordSpacing,
+            textAlign: this.settings.justified ? 'justify' : 'left'
+        };
+    }
+
+    /**
+     * Adds window resize handler to recalculate pagination on viewport changes
+     */
+    private addWindowResizeHandler(): void {
+        let resizeTimeout: number;
+
+        const handleResize = () => {
+            // Debounce resize events
+            clearTimeout(resizeTimeout);
+            resizeTimeout = window.setTimeout(async () => {
+                if (this.readerModeState.isActive) {
+                    await this.recalculatePagination();
+                }
+            }, 300);
+        };
+
+        this.registerDomEvent(window, 'resize', handleResize);
+    }
+
+    /**
+     * Adds mobile touch handlers for swipe navigation and control activation
+     */
+    private addMobileTouchHandlers(): void {
+        // Check if we're on mobile by checking platform or screen size
+        const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+            window.innerWidth < 768;
+
+        if (!isMobile) {
+            return;
+        }
+
+        const activeLeaf = this.app.workspace.activeLeaf;
+        if (!activeLeaf?.view?.containerEl) {
+            return;
+        }
+
+        const container = activeLeaf.view.containerEl;
+        let startX = 0;
+        let startY = 0;
+        let startTime = 0;
+
+        const handleTouchStart = (e: TouchEvent) => {
+            if (!this.readerModeState.isActive) return;
+
+            const touch = e.touches[0];
+            startX = touch.clientX;
+            startY = touch.clientY;
+            startTime = Date.now();
+        };
+
+        const handleTouchEnd = (e: TouchEvent) => {
+            if (!this.readerModeState.isActive) return;
+
+            const touch = e.changedTouches[0];
+            const endX = touch.clientX;
+            const endY = touch.clientY;
+            const endTime = Date.now();
+
+            const deltaX = endX - startX;
+            const deltaY = endY - startY;
+            const deltaTime = endTime - startTime;
+
+            // Check for swipe gestures (minimum distance and maximum time)
+            const minSwipeDistance = 50;
+            const maxSwipeTime = 500;
+
+            if (Math.abs(deltaX) > minSwipeDistance &&
+                Math.abs(deltaY) < Math.abs(deltaX) / 2 &&
+                deltaTime < maxSwipeTime) {
+
+                if (deltaX > 0) {
+                    // Swipe right - previous page
+                    this.previousPage();
+                } else {
+                    // Swipe left - next page  
+                    this.nextPage();
+                }
+            } else if (deltaTime < 300 && Math.abs(deltaX) < 30 && Math.abs(deltaY) < 30) {
+                // Tap to show controls
+                this.showReaderControls();
+            }
+        };
+
+        this.registerDomEvent(container, 'touchstart', handleTouchStart);
+        this.registerDomEvent(container, 'touchend', handleTouchEnd);
+    }
+
+    /**
+     * Navigates to the next page
+     */
+    private async nextPage(): Promise<void> {
+        console.log('➡️ Next page requested');
+
+        if (!this.readerModeState.paginationData) {
+            console.log('⚠️ No pagination data, falling back to chapter navigation');
+            // Fall back to chapter navigation if pagination not available
+            await this.nextChapter();
+            return;
+        }
+
+        const paginationData = this.readerModeState.paginationData;
+        const nextPageIndex = paginationData.currentPage + 1;
+
+        console.log(`📄 Current page: ${paginationData.currentPage + 1}/${paginationData.totalPages}`);
+
+        if (nextPageIndex < paginationData.totalPages) {
+            console.log(`🔄 Navigating to page ${nextPageIndex + 1}`);
+            // Navigate to next page in current chapter
+            const success = await this.paginationEngine.navigateToPage(paginationData, nextPageIndex);
+            if (success) {
+                console.log('✅ Navigation successful');
+                this.updatePageDisplay();
+                this.applyPageTransition();
+                this.saveReadingPosition(); // Save position after navigation
+            } else {
+                console.log('❌ Navigation failed');
+            }
+        } else {
+            console.log('📚 At last page, trying next chapter');
+            // Navigate to next chapter
+            await this.nextChapter();
+        }
+    }
+
+    /**
+     * Navigates to the previous page
+     */
+    private async previousPage(): Promise<void> {
+        console.log('⬅️ Previous page requested');
+
+        if (!this.readerModeState.paginationData) {
+            console.log('⚠️ No pagination data, falling back to chapter navigation');
+            // Fall back to chapter navigation if pagination not available
+            await this.previousChapter();
+            return;
+        }
+
+        const paginationData = this.readerModeState.paginationData;
+        const prevPageIndex = paginationData.currentPage - 1;
+
+        console.log(`📄 Current page: ${paginationData.currentPage + 1}/${paginationData.totalPages}`);
+
+        if (prevPageIndex >= 0) {
+            console.log(`🔄 Navigating to page ${prevPageIndex + 1}`);
+            // Navigate to previous page in current chapter
+            const success = await this.paginationEngine.navigateToPage(paginationData, prevPageIndex);
+            if (success) {
+                console.log('✅ Navigation successful');
+                this.updatePageDisplay();
+                this.applyPageTransition();
+                this.saveReadingPosition(); // Save position after navigation
+            } else {
+                console.log('❌ Navigation failed');
+            }
+        } else {
+            console.log('📚 At first page, trying previous chapter');
+            // Navigate to previous chapter
+            await this.previousChapter();
+        }
+    }
+
+    /**
+     * Saves the current reading position
+     */
+    private saveReadingPosition(): void {
+        if (!this.readerModeState.currentChapter || !this.readerModeState.paginationData) {
+            return;
+        }
+
+        const filePath = this.readerModeState.currentChapter.path;
+        const { currentPage } = this.readerModeState.paginationData;
+
+        const position: ReadingPosition = {
+            chapterFile: this.readerModeState.currentChapter,
+            pageIndex: currentPage,
+            scrollOffset: window.scrollY,
+            characterOffset: this.paginationEngine.calculateCharacterPosition(currentPage, this.readerModeState.paginationData),
+            timestamp: Date.now()
+        };
+
+        this.settings.readingPositions[filePath] = position;
+        this.saveSettings();
+    }
+
+    /**
+     * Restores the reading position for the current chapter
+     */
+    private async restoreReadingPosition(): Promise<void> {
+        if (!this.readerModeState.currentChapter || !this.readerModeState.paginationData) {
+            return;
+        }
+
+        const filePath = this.readerModeState.currentChapter.path;
+        const savedPosition = this.settings.readingPositions[filePath];
+
+        if (!savedPosition) {
+            return; // No saved position
+        }
+
+        // Navigate to the saved page
+        const success = await this.paginationEngine.navigateToPage(
+            this.readerModeState.paginationData,
+            savedPosition.pageIndex
+        );
+
+        if (success) {
+            this.updatePageDisplay();
+
+            // Update the reading position in state
+            this.readerModeState.readingPosition = savedPosition;
+        }
+    }
+
+    /**
+     * Updates the page number displays in the UI
+     */
+    private updatePageDisplay(): void {
+        if (!this.readerModeState.paginationData) return;
+
+        const { currentPage, totalPages } = this.readerModeState.paginationData;
+
+        // Update page pills if they exist
+        const topPill = document.querySelector('.obsidian-r-top-pill');
+        const bottomPill = document.querySelector('.obsidian-r-bottom-pill');
+
+        if (topPill) {
+            topPill.textContent = `Page ${currentPage + 1}`;
+        }
+
+        if (bottomPill) {
+            bottomPill.textContent = `${currentPage + 1} / ${totalPages}`;
+        }
+
+        // Update window title to show pages remaining
+        const pagesRemaining = totalPages - currentPage - 1;
+        if (pagesRemaining > 0) {
+            document.title = `${pagesRemaining} pages remaining`;
+        } else {
+            document.title = 'Last page';
+        }
+    }
+
+    /**
+     * Applies page transition animation for page navigation
+     */
+    private applyPageTransition(): void {
+        if (!this.readerModeState.paginationData?.contentContainer) return;
+
+        const contentEl = this.readerModeState.paginationData.contentContainer;
+        const transitionType = this.settings.transitionType;
+
+        // Apply the existing transition logic but for page changes
+        this.applyPageTransitionEffect(contentEl, transitionType);
+    }
+
+    /**
+     * Applies page transition effects based on settings
+     */
+    private applyPageTransitionEffect(contentEl: HTMLElement, transitionType: string): void {
+        // Remove any existing transition classes
+        contentEl.classList.remove('obsidian-r-page-transition', 'page-curl', 'slide', 'fade', 'scroll');
+
+        switch (transitionType) {
+            case 'fade':
+                contentEl.classList.add('obsidian-r-page-transition', 'fade');
+                contentEl.style.opacity = '0.7';
+                setTimeout(() => {
+                    contentEl.style.opacity = '1';
+                }, 150);
+                break;
+
+            case 'slide':
+                contentEl.classList.add('obsidian-r-page-transition', 'slide');
+                contentEl.style.transform = 'translateX(-10px)';
+                setTimeout(() => {
+                    contentEl.style.transform = 'translateX(0)';
+                }, 50);
+                break;
+
+            case 'page-curl':
+                contentEl.classList.add('obsidian-r-page-transition', 'page-curl');
+                contentEl.style.transform = 'rotateY(-2deg) scale(0.98)';
+                setTimeout(() => {
+                    contentEl.style.transform = 'rotateY(0deg) scale(1)';
+                }, 100);
+                break;
+
+            case 'scroll':
+                contentEl.classList.add('obsidian-r-page-transition', 'scroll');
+                contentEl.style.transform = 'translateY(-5px)';
+                contentEl.style.opacity = '0.8';
+                setTimeout(() => {
+                    contentEl.style.transform = 'translateY(0)';
+                    contentEl.style.opacity = '1';
+                }, 100);
+                break;
+        }
     }
 
     /**
@@ -1077,9 +2229,9 @@ export default class ObsidianRPlugin extends Plugin {
     }
 
     /**
-     * Applies page transition effects based on settings
+     * Applies content transition effects based on settings for content replacement
      */
-    private applyPageTransition(contentEl: HTMLElement, newContent: string, isInitialLoad: boolean = false) {
+    private applyContentTransition(contentEl: HTMLElement, newContent: string, isInitialLoad: boolean = false) {
         const transitionType = this.settings.transitionType;
 
 
@@ -1204,10 +2356,21 @@ export default class ObsidianRPlugin extends Plugin {
     }
 
     /**
-     * Navigates to next chapter
+     * Navigates to next chapter or page
      */
     private async nextChapter() {
-        if (!this.readerModeState.currentBook) return;
+        // Use page navigation if available
+        if (this.readerModeState.paginationData &&
+            this.readerModeState.paginationData.currentPage < this.readerModeState.paginationData.totalPages - 1) {
+            await this.nextPage();
+            return;
+        }
+
+        // Navigate to next chapter only if we have multiple chapters
+        if (!this.readerModeState.currentBook || this.readerModeState.currentBook.chapters.length <= 1) {
+            new Notice('No next chapter available');
+            return;
+        }
 
         const chapters = this.readerModeState.currentBook.chapters;
         const currentIndex = chapters.findIndex(ch => ch.path === this.readerModeState.currentChapter?.path);
@@ -1216,14 +2379,27 @@ export default class ObsidianRPlugin extends Plugin {
             const nextChapter = chapters[currentIndex + 1];
             // Open the next chapter file
             await this.app.workspace.openLinkText(nextChapter.path, '', false);
+        } else {
+            new Notice('No next chapter available');
         }
     }
 
     /**
-     * Navigates to previous chapter
+     * Navigates to previous chapter or page
      */
     private async previousChapter() {
-        if (!this.readerModeState.currentBook) return;
+        // Use page navigation if available
+        if (this.readerModeState.paginationData &&
+            this.readerModeState.paginationData.currentPage > 0) {
+            await this.previousPage();
+            return;
+        }
+
+        // Navigate to previous chapter only if we have multiple chapters
+        if (!this.readerModeState.currentBook || this.readerModeState.currentBook.chapters.length <= 1) {
+            new Notice('No previous chapter available');
+            return;
+        }
 
         const chapters = this.readerModeState.currentBook.chapters;
         const currentIndex = chapters.findIndex(ch => ch.path === this.readerModeState.currentChapter?.path);
@@ -1232,6 +2408,8 @@ export default class ObsidianRPlugin extends Plugin {
             const prevChapter = chapters[currentIndex - 1];
             // Open the previous chapter file
             await this.app.workspace.openLinkText(prevChapter.path, '', false);
+        } else {
+            new Notice('No previous chapter available');
         }
     }
 
@@ -1269,6 +2447,19 @@ export default class ObsidianRPlugin extends Plugin {
         this.destroyReaderModeUI();
 
         new Notice('Reader mode deactivated');
+    }
+
+    /**
+     * Creates a minimal book structure for a single file
+     */
+    private createSingleFileBook(file: TFile): BookStructure {
+        return {
+            folder: file.parent as TFolder,
+            mainFile: file,
+            imageFile: null,
+            chapters: [file], // Single chapter
+            title: file.basename
+        };
     }
 
     /**
@@ -1362,8 +2553,8 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Create navigation buttons with proper icons
         const pageNavPromise = Promise.all([
-            IconManager.createIconButton('chevron-left', 'Previous chapter', () => this.previousChapter()),
-            IconManager.createIconButton('chevron-right', 'Next chapter', () => this.nextChapter())
+            IconManager.createIconButton('chevron-left', 'Previous page', () => this.previousPage()),
+            IconManager.createIconButton('chevron-right', 'Next page', () => this.nextPage())
         ]).then(([prevBtn, nextBtn]) => {
             pageNavGroup.appendChild(prevBtn);
             pageNavGroup.appendChild(nextBtn);
@@ -1474,6 +2665,61 @@ export default class ObsidianRPlugin extends Plugin {
 
         // Append controls to the active workspace leaf container
         this.appendControlsToActiveTab();
+
+        // Create and show page indicators
+        this.createPageIndicators();
+    }
+
+    /**
+     * Creates page indicator pills (top and bottom)
+     */
+    private createPageIndicators(): void {
+        // Remove any existing pills
+        document.querySelectorAll('.obsidian-r-top-pill, .obsidian-r-bottom-pill').forEach(pill => pill.remove());
+
+        const workspaceLeaf = this.app.workspace.activeLeaf;
+        if (!workspaceLeaf?.view?.containerEl) return;
+
+        const targetContainer = workspaceLeaf.view.containerEl;
+
+        // Create top pill (current page)
+        const topPill = document.createElement('div');
+        topPill.className = 'obsidian-r-top-pill';
+        topPill.textContent = this.getTopPillText();
+        targetContainer.appendChild(topPill);
+
+        // Create bottom pill (page X of Y)
+        const bottomPill = document.createElement('div');
+        bottomPill.className = 'obsidian-r-bottom-pill';
+        bottomPill.textContent = this.getBottomPillText();
+        targetContainer.appendChild(bottomPill);
+
+        // Update page display
+        this.updatePageDisplay();
+    }
+
+    /**
+     * Gets the text for the top pill (current page or chapter progress)
+     */
+    private getTopPillText(): string {
+        if (!this.readerModeState.paginationData) {
+            return 'Reader Mode';
+        }
+
+        const { currentPage } = this.readerModeState.paginationData;
+        return `Page ${currentPage + 1}`;
+    }
+
+    /**
+     * Gets the text for the bottom pill (total progress)
+     */
+    private getBottomPillText(): string {
+        if (!this.readerModeState.paginationData) {
+            return 'Loading...';
+        }
+
+        const { currentPage, totalPages } = this.readerModeState.paginationData;
+        return `${currentPage + 1} / ${totalPages}`;
     }
 
     /**
@@ -1843,13 +3089,36 @@ export default class ObsidianRPlugin extends Plugin {
      */
     private addReaderModeKeyboardHandlers() {
 
-        const testHandler = (e: KeyboardEvent) => {
-            if (!this.readerModeState.isActive) return;
+        const keyHandler = (e: KeyboardEvent) => {
+            if (!this.readerModeState.isActive || !this.readerModeState.paginationData) return;
 
-            // Only handle font size keys, allow normal scrolling for navigation keys
-            // Remove preventDefault() for arrow keys, Page Up/Down, Home/End to restore normal scrolling
+            // Arrow key navigation for pagination
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                this.nextPage();
+                return;
+            }
 
-            // Test for font size keys (without modifiers)
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                this.previousPage();
+                return;
+            }
+
+            // Page Up/Down navigation
+            if (e.key === 'PageDown') {
+                e.preventDefault();
+                this.nextPage();
+                return;
+            }
+
+            if (e.key === 'PageUp') {
+                e.preventDefault();
+                this.previousPage();
+                return;
+            }
+
+            // Font size keys (without modifiers)
             if (e.key === '+' || e.key === '=') {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
                     e.preventDefault();
@@ -1867,10 +3136,10 @@ export default class ObsidianRPlugin extends Plugin {
             }
         };
 
-        document.addEventListener('keydown', testHandler, { capture: true });
+        document.addEventListener('keydown', keyHandler, { capture: true });
 
         // Store for cleanup
-        this.readerKeyboardHandler = testHandler;
+        this.readerKeyboardHandler = keyHandler;
     }
 
     /**
@@ -1986,11 +3255,35 @@ export default class ObsidianRPlugin extends Plugin {
     }
 
     /**
+     * Recalculates pagination when settings change while preserving reading position
+     */
+    private async recalculatePagination(): Promise<void> {
+        if (!this.readerModeState.isActive || !this.readerModeState.currentChapter) {
+            return;
+        }
+
+        // Store current reading position
+        const currentPage = this.readerModeState.paginationData?.currentPage || 0;
+
+        // Recalculate pagination
+        await this.initializePagination();
+
+        // Try to maintain reading position
+        if (this.readerModeState.paginationData && currentPage < this.readerModeState.paginationData.totalPages) {
+            await this.paginationEngine.navigateToPage(this.readerModeState.paginationData, currentPage);
+            this.updatePageDisplay();
+        }
+    }
+
+    /**
      * Refreshes reader mode rendering when settings change
      */
     public refreshReaderModeIfActive() {
         if (this.readerModeState.isActive) {
             this.applyReaderModeStyles();
+
+            // Recalculate pagination when typography settings change
+            this.recalculatePagination();
 
             // Only recreate controls if they don't exist
             // Don't destroy existing controls just to refresh settings
