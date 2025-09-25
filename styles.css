@@ -50,7 +50,6 @@
     color: var(--text-normal) !important;
     font-size: var(--font-ui-small) !important;
     font-weight: var(--font-weight-medium) !important;
-    border-top: 1px solid var(--background-modifier-border) !important;
     z-index: 2001 !important;
     pointer-events: none !important;
     transition: all 0.2s ease !important;

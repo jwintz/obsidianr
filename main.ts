@@ -1725,12 +1725,9 @@ export default class ObsidianRPlugin extends Plugin {
         // Calculate vertical margins as a proportion of horizontal margins to maintain aspect ratio
         const verticalMarginPx = horizontalMarginPx * (windowHeight / windowWidth);
 
-        // Get the actual height of the view-header-title-container for bottom margin
-        const titleContainer = document.querySelector('.view-header-title-container') as HTMLElement;
-        const actualHeaderHeight = titleContainer ? titleContainer.offsetHeight : 37; // fallback to 37px (typical header height)
-
-        // Bottom margin should be vertical margin + actual header height
-        const bottomMarginPx = verticalMarginPx + actualHeaderHeight;
+        // Bottom margin is just the vertical margin - the bottom indicator is positioned separately
+        // to avoid double-counting the header height
+        const bottomMarginPx = verticalMarginPx;
 
         const params = {
             width: windowWidth,
@@ -1744,7 +1741,6 @@ export default class ObsidianRPlugin extends Plugin {
         };
 
         console.log('📐 Calculated viewport parameters (computed from settings):', params);
-        console.log(`📏 Actual header height: ${actualHeaderHeight}px`);
         console.log(`📏 Effective page height: ${params.height - params.topMargin - params.bottomMargin}px`);
         return params;
     }
@@ -3102,7 +3098,6 @@ export default class ObsidianRPlugin extends Plugin {
             font-size: ${headerStyle.fontSize || 'var(--font-ui-small)'};
             font-weight: ${headerStyle.fontWeight || 'var(--font-weight-medium)'};
             font-family: ${headerStyle.fontFamily || 'var(--font-interface)'};
-            border-top: 1px solid var(--background-modifier-border);
             z-index: 2001;
             pointer-events: none;
         `;
