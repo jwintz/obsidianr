@@ -1,7 +1,7 @@
 {
     "name": "obsidianr",
     "version": "0.0.1",
-    "description": "Reader mode plugin for Obsidian",
+    "description": "",
     "main": "main.js",
     "scripts": {
         "build": "node scripts/build.mjs",

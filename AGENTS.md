@@ -8,8 +8,14 @@ ocuments/Vault/ and subfolder
 
 # Book detection in Vault
 
-- detect books in the vault, they are transcribed using: https://github.com/jwintz/obsidiant.
-- Add a pill to book folder in the Files pane
+- Detect books in the vault, they are transcribed using https://github.com/jwintz/obsidiant.
+- A folder qualifies as a book only if its markdown children expose frontmatter marking them as chapters (`type: chapter`, etc.) and share the same `book` metadata.
+- Detection runs from the metadata cache when available and falls back to parsing frontmatter directly from the file when needed. No file writes occur.
+- Register the folder as a book with the aggregated chapter list (sorted by explicit chapter order or filename heuristics as a fallback).
+- Add a `BOOK` pill to the folder entry in the File Explorer using the native Obsidian badge element:
+    * Resolve the File Explorer view (`fileItems`) and reuse the explorer's own DOM nodes when injecting/removing badges.
+    * Clone the existing `nav-folder-title-badge` element when present so styling matches the `BASE` pill exactly (works on desktop and mobile).
+    * Listen to vault and metadata events with debounced recomputation, and observe the explorer DOM while ignoring mutations caused by the injected badge to avoid loops.
 
 # Pagination algorithm
 

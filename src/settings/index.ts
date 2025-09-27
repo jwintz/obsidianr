@@ -162,6 +162,23 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                     })
             );
 
+        containerEl.createEl('h3', { text: 'Goals' });
+
+        new Setting(containerEl)
+            .setName('Daily reading goal (minutes)')
+            .setDesc('Used for daily statistics and streaks')
+            .addSlider((slider) =>
+                slider
+                    .setLimits(5, 240, 5)
+                    .setDynamicTooltip()
+                    .setValue(this.plugin.settings.dailyGoalMinutes)
+                    .onChange(async (value) => {
+                        this.plugin.settings.dailyGoalMinutes = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+
         containerEl.createEl('h3', { text: 'Reset' });
 
         new Setting(containerEl)
@@ -177,23 +194,6 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                         this.display();
                         new Notice('All settings have been reset to defaults');
-                    })
-            );
-
-        containerEl.createEl('h3', { text: 'Goals' });
-
-        new Setting(containerEl)
-            .setName('Daily reading goal (minutes)')
-            .setDesc('Used for daily statistics and streaks')
-            .addSlider((slider) =>
-                slider
-                    .setLimits(5, 240, 5)
-                    .setDynamicTooltip()
-                    .setValue(this.plugin.settings.dailyGoalMinutes)
-                    .onChange(async (value) => {
-                        this.plugin.settings.dailyGoalMinutes = value;
-                        await this.plugin.saveSettings();
-                        this.plugin.refreshReaderModeIfActive();
                     })
             );
     }
