@@ -1,0 +1,8 @@
+/* Book detection pills */
+.nav-folder.obsidianr-book-folder > .nav-folder-title {
+	overflow: visible;
+}
+
+.obsidianr-book-pill {
+	white-space: nowrap;
+}

@@ -1,0 +1,11 @@
+{
+    "id": "obsidianr",
+    "name": "ObsidianR Reader",
+    "version": "0.0.1",
+    "minAppVersion": "1.5.0",
+    "description": "Reader mode for Obsidian notebooks converted from EPUB.",
+    "author": "Julien Wintz",
+    "authorUrl": "https://github.com/jwintz/obsidianr",
+    "isDesktopOnly": false,
+    "main": "main.js"
+}

@@ -1,0 +1,25 @@
+{
+    "name": "obsidianr",
+    "version": "0.0.1",
+    "description": "Reader mode plugin for Obsidian",
+    "main": "main.js",
+    "scripts": {
+        "build": "node scripts/build.mjs",
+        "dev": "node scripts/build.mjs --watch",
+        "apply": "npm run build && node scripts/apply.mjs"
+    },
+    "keywords": [
+        "obsidian",
+        "plugin",
+        "reader"
+    ],
+    "author": "Julien Wintz",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/node": "^20.16.5",
+        "esbuild": "^0.23.0",
+        "obsidian": "^1.5.0",
+        "tslib": "^2.6.2",
+        "typescript": "^5.3.3"
+    }
+}
