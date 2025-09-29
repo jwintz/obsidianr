@@ -16,6 +16,7 @@ export interface ReaderSessionState {
     currentFile: TFile | null;
     currentPage: number;
     totalPages: number;
+    pageHeight: number;
     overlayVisible: boolean;
     zenMode: boolean;
     lastInteractionTs: number;
@@ -69,6 +70,7 @@ export function createInitialState(): ReaderSessionState {
         currentFile: null,
         currentPage: 0,
         totalPages: 0,
+    pageHeight: 0,
         overlayVisible: false,
         zenMode: false,
         lastInteractionTs: Date.now(),
@@ -80,7 +82,7 @@ export function createInitialState(): ReaderSessionState {
             columns: 1,
             horizontalMargins: 12,
             justified: true,
-            transitionType: 'slide'
+            transitionType: 'none'
         }
     };
 }

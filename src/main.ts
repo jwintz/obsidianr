@@ -62,7 +62,7 @@ export default class ObsidianRPlugin extends Plugin {
                 }
                 if (file && this.state.snapshot.currentFile !== file) {
                     this.state.update({ currentFile: file, currentPage: 0 });
-                    this.reader.refreshCurrentView();
+                    this.reader.refreshCurrentView(false);
                 }
             })
         );

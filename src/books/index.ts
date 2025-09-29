@@ -80,6 +80,33 @@ export class BookCatalog {
         return Array.from(this.books.values());
     }
 
+    getChapterNeighbors(file: TFile | null): { previous: TFile | null; next: TFile | null; book: BookInfo | null; } {
+        if (!file) {
+            return { previous: null, next: null, book: null };
+        }
+
+        const parent = file.parent;
+        if (!parent) {
+            return { previous: null, next: null, book: null };
+        }
+
+        const key = normalizePath(parent.path);
+        const book = this.books.get(key) ?? null;
+        if (!book) {
+            return { previous: null, next: null, book: null };
+        }
+
+        const index = book.chapters.findIndex((chapter) => chapter.file.path === file.path);
+        if (index === -1) {
+            return { previous: null, next: null, book };
+        }
+
+        const previous = index > 0 ? book.chapters[index - 1].file : null;
+        const next = index < book.chapters.length - 1 ? book.chapters[index + 1].file : null;
+
+        return { previous, next, book };
+    }
+
     private observeVault(): void {
         const vault = this.plugin.app.vault;
         const metadata = this.plugin.app.metadataCache;

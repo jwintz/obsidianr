@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS: ObsidianRSettings = {
     characterSpacing: 0,
     wordSpacing: 0,
     fontSize: 18,
-    transitionType: 'slide',
+    transitionType: 'none',
     dailyGoalMinutes: 30
 };
 

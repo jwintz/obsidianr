@@ -80,6 +80,8 @@ if (this.app.isMobile) {
 
 - on mobile, sliding left/right must trigger page transitions, touch events must activate the overlay controls
 
+- Front matter must not be displayed in reader mode
+
 # Settings
 
 ```
