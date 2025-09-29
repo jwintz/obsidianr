@@ -48,7 +48,6 @@ interface FileExplorerItem {
     titleEl?: HTMLElement;
     selfEl?: HTMLElement;
 }
-
 interface FileExplorerView {
     fileItems: Record<string, FileExplorerItem>;
 }

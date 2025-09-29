@@ -9,6 +9,7 @@ export interface ReaderParameters {
     horizontalMargins: number;
     justified: boolean;
     transitionType: 'none' | 'page-curl' | 'slide' | 'fade' | 'scroll';
+    fontFamily: string;
 }
 
 export interface ReaderSessionState {
@@ -82,7 +83,8 @@ export function createInitialState(): ReaderSessionState {
             columns: 1,
             horizontalMargins: 12,
             justified: true,
-            transitionType: 'none'
+            transitionType: 'none',
+            fontFamily: 'inherit'
         }
     };
 }

@@ -11,6 +11,7 @@ export interface ObsidianRSettings {
     fontSize: number;
     transitionType: 'none' | 'page-curl' | 'slide' | 'fade' | 'scroll';
     dailyGoalMinutes: number;
+    fontFamily: string;
 }
 
 export const DEFAULT_SETTINGS: ObsidianRSettings = {
@@ -22,7 +23,8 @@ export const DEFAULT_SETTINGS: ObsidianRSettings = {
     wordSpacing: 0,
     fontSize: 18,
     transitionType: 'none',
-    dailyGoalMinutes: 30
+    dailyGoalMinutes: 30,
+    fontFamily: 'inherit'
 };
 
 export class ObsidianRSettingTab extends PluginSettingTab {
@@ -137,6 +139,23 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                     .setDynamicTooltip()
                     .onChange(async (value) => {
                         this.plugin.settings.fontSize = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName('Font Family')
+            .setDesc('Default font family used in reader mode')
+            .addDropdown((dropdown) =>
+                dropdown
+                    .addOption('inherit', 'System default')
+                    .addOption('serif', 'Serif')
+                    .addOption('sans-serif', 'Sans serif')
+                    .addOption('monospace', 'Monospace')
+                    .setValue(this.plugin.settings.fontFamily)
+                    .onChange(async (value) => {
+                        this.plugin.settings.fontFamily = value;
                         await this.plugin.saveSettings();
                         this.plugin.refreshReaderModeIfActive();
                     })

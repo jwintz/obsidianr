@@ -38,6 +38,7 @@ export class PaginationEngine {
         lineHeight: string;
         letterSpacing: string;
         wordSpacing: string;
+        fontFamily: string;
         paddingTop: string;
         paddingBottom: string;
         columnCount: string;
@@ -218,6 +219,7 @@ export class PaginationEngine {
         this.contentEl.style.lineHeight = styles.lineHeight;
         this.contentEl.style.letterSpacing = styles.letterSpacing;
         this.contentEl.style.wordSpacing = styles.wordSpacing;
+        this.contentEl.style.fontFamily = styles.fontFamily;
         this.contentEl.style.paddingTop = styles.paddingTop;
         this.contentEl.style.paddingBottom = styles.paddingBottom;
         this.contentEl.style.columnCount = styles.columnCount;
@@ -248,6 +250,7 @@ export class PaginationEngine {
             lineHeight: style.lineHeight,
             letterSpacing: style.letterSpacing,
             wordSpacing: style.wordSpacing,
+            fontFamily: style.fontFamily,
             paddingTop: style.paddingTop,
             paddingBottom: style.paddingBottom,
             columnCount: style.columnCount,
@@ -295,6 +298,7 @@ export class PaginationEngine {
         target.style.lineHeight = `${parameters.lineSpacing}`;
         target.style.letterSpacing = `${parameters.letterSpacing}em`;
         target.style.wordSpacing = `${parameters.wordSpacing}em`;
+        target.style.fontFamily = parameters.fontFamily;
         target.classList.toggle('is-justified', parameters.justified);
 
         const guardPadding = Math.max(12, Math.round(parameters.fontSize * 0.6));

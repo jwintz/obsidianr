@@ -115,7 +115,8 @@ export default class ObsidianRPlugin extends Plugin {
             columns: this.settings.columns,
             horizontalMargins: this.settings.horizontalMargins,
             justified: this.settings.justified,
-            transitionType: this.settings.transitionType
+            transitionType: this.settings.transitionType,
+            fontFamily: this.settings.fontFamily
         };
     }
 

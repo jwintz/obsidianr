@@ -1,4 +1,4 @@
-import { MarkdownView, WorkspaceLeaf, Platform, MarkdownRenderer, TFile } from 'obsidian';
+import { MarkdownView, WorkspaceLeaf, Platform, MarkdownRenderer, TFile, setIcon } from 'obsidian';
 import type ObsidianRPlugin from '../main';
 import { ReaderState, ReaderParameters } from '../core/state';
 import { PaginationEngine } from './pagination';
@@ -6,6 +6,15 @@ import type { BookInfo } from '../books';
 import { logDebug } from '../core/logger';
 
 const BODY_CLASS = 'obsidianr-reader';
+const ZEN_BODY_CLASS = 'obsidianr-zen';
+const OVERLAY_AUTO_HIDE_MS = 5000;
+
+const FONT_FAMILY_OPTIONS: Array<{ value: string; label: string; }> = [
+    { value: 'inherit', label: 'System default' },
+    { value: 'serif', label: 'Serif' },
+    { value: 'sans-serif', label: 'Sans serif' },
+    { value: 'monospace', label: 'Monospace' }
+];
 
 export class ReaderManager {
     private activeLeaf: WorkspaceLeaf | null = null;
@@ -30,6 +39,61 @@ export class ReaderManager {
     private pendingLeafResolution: number | null = null;
     private chapterPageCounts: Map<string, number> = new Map();
     private chapterPageComputePromises: Map<string, Promise<number | null>> = new Map();
+    private overlayEl: HTMLElement | null = null;
+    private overlayHideTimeout: number | null = null;
+    private overlayHover = false;
+    private fontSelectEl: HTMLSelectElement | null = null;
+    private zenToggleButtonEl: HTMLButtonElement | null = null;
+    private touchStartX: number | null = null;
+    private touchStartY: number | null = null;
+    private touchStartTime = 0;
+    private handleViewportPointerUp = (event: PointerEvent) => {
+        if (!this.state.snapshot.active) {
+            return;
+        }
+        if (this.overlayEl && event.target instanceof Node && this.overlayEl.contains(event.target)) {
+            return;
+        }
+        if (event.pointerType === 'mouse' && event.button !== 0) {
+            return;
+        }
+        this.state.markInteraction();
+        if (this.state.snapshot.overlayVisible) {
+            this.scheduleOverlayAutoHide();
+        } else {
+            this.showOverlayControls();
+        }
+    };
+
+    private handleOverlayPointerEnter = () => {
+        this.overlayHover = true;
+        this.clearOverlayTimer();
+    };
+
+    private handleOverlayPointerLeave = () => {
+        this.overlayHover = false;
+        if (this.state.snapshot.overlayVisible) {
+            this.scheduleOverlayAutoHide();
+        }
+    };
+
+    private handleOverlayPointerDown = () => {
+        this.overlayHover = true;
+        this.state.markInteraction();
+        this.clearOverlayTimer();
+    };
+
+    private handleOverlayFocusIn = () => {
+        this.overlayHover = true;
+        this.clearOverlayTimer();
+    };
+
+    private handleOverlayFocusOut = () => {
+        this.overlayHover = false;
+        if (this.state.snapshot.overlayVisible) {
+            this.scheduleOverlayAutoHide();
+        }
+    };
 
     constructor(
         private readonly plugin: ObsidianRPlugin,
@@ -58,6 +122,7 @@ export class ReaderManager {
 
         this.activeLeaf = view.leaf;
         document.body.classList.add(BODY_CLASS);
+        this.applyZenModeClass(false);
         this.state.update({
             active: true,
             currentFile: view.file ?? null,
@@ -79,6 +144,8 @@ export class ReaderManager {
             overlayVisible: false,
             zenMode: false
         });
+        this.applyZenModeClass(false);
+        this.hideOverlayControls(true);
 
         this.resetHeaderTitle();
         this.clearPendingLeafResolution();
@@ -192,6 +259,7 @@ export class ReaderManager {
         target.style.lineHeight = `${parameters.lineSpacing}`;
         target.style.letterSpacing = `${parameters.letterSpacing}em`;
         target.style.wordSpacing = `${parameters.wordSpacing}em`;
+        target.style.fontFamily = parameters.fontFamily;
         target.classList.toggle('is-justified', parameters.justified);
 
         const guardPadding = Math.max(12, Math.round(parameters.fontSize * 0.6));
@@ -220,6 +288,7 @@ export class ReaderManager {
         this.viewportEl.style.paddingTop = `${verticalPadding}px`;
         const indicatorHeight = this.pageIndicatorHeight;
         this.viewportEl.style.paddingBottom = `${verticalPadding + indicatorHeight}px`;
+        this.viewportEl.style.setProperty('--obsidianr-indicator-height', `${indicatorHeight}px`);
 
         if (this.pageIndicatorEl) {
             const desiredHeight = this.computePageIndicatorHeight(this.viewportEl);
@@ -232,8 +301,11 @@ export class ReaderManager {
                 }
                 this.viewportEl.dataset.obsidianrIndicatorHeight = `${desiredHeight}`;
                 this.viewportEl.style.paddingBottom = `${verticalPadding + desiredHeight}px`;
+                this.viewportEl.style.setProperty('--obsidianr-indicator-height', `${desiredHeight}px`);
             }
         }
+
+        this.syncOverlayControls();
     }
 
     private computePageIndicatorHeight(viewport: HTMLElement): number {
@@ -256,11 +328,16 @@ export class ReaderManager {
             snapshot.totalPages
         );
 
-        if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(current) || current <= 0) {
+        if (!Number.isFinite(current) || current <= 0) {
             this.pageIndicatorEl.textContent = '';
             this.pageIndicatorEl.classList.remove('is-visible');
         } else {
-            this.pageIndicatorEl.textContent = `Page ${current} / ${total}`;
+            const hasTotal = Number.isFinite(total) && total > 0;
+            if (snapshot.overlayVisible && hasTotal) {
+                this.pageIndicatorEl.textContent = `Page ${current} / ${total}`;
+            } else {
+                this.pageIndicatorEl.textContent = `Page ${current}`;
+            }
             this.pageIndicatorEl.classList.add('is-visible');
         }
 
@@ -271,7 +348,238 @@ export class ReaderManager {
             }
         }
 
-        this.updateHeaderPagesLeft(snapshot.totalPages, snapshot.currentPage);
+        if (snapshot.overlayVisible) {
+            this.updateHeaderPagesLeft(snapshot.totalPages, snapshot.currentPage);
+        } else {
+            this.resetHeaderTitle();
+        }
+    }
+
+    private createOverlay(viewport: HTMLElement): void {
+        if (this.overlayEl) {
+            return;
+        }
+
+        const doc = viewport.ownerDocument ?? document;
+        const overlay = doc.createElement('div');
+        overlay.classList.add('obsidianr-reader-overlay');
+        overlay.setAttribute('role', 'toolbar');
+        overlay.setAttribute('aria-hidden', 'true');
+
+        const navigationGroup = doc.createElement('div');
+        navigationGroup.classList.add('obsidianr-overlay-group');
+        navigationGroup.appendChild(this.createOverlayButton(doc, 'chevron-left', 'Previous page', () => this.previousPage()));
+        navigationGroup.appendChild(this.createOverlayButton(doc, 'chevron-right', 'Next page', () => this.nextPage()));
+        overlay.appendChild(navigationGroup);
+
+        const typographyGroup = doc.createElement('div');
+        typographyGroup.classList.add('obsidianr-overlay-group');
+        typographyGroup.appendChild(this.createOverlayButton(doc, 'minus', 'Decrease font size', () => this.decreaseFont()));
+        typographyGroup.appendChild(this.createOverlayButton(doc, 'plus', 'Increase font size', () => this.increaseFont()));
+
+        const selectWrapper = doc.createElement('div');
+        selectWrapper.classList.add('obsidianr-overlay-select-wrapper');
+        const select = doc.createElement('select');
+        select.classList.add('obsidianr-overlay-select');
+        select.setAttribute('aria-label', 'Font family');
+        for (const option of FONT_FAMILY_OPTIONS) {
+            const optionEl = doc.createElement('option');
+            optionEl.value = option.value;
+            optionEl.textContent = option.label;
+            select.appendChild(optionEl);
+        }
+        const currentFont = this.state.snapshot.parameters.fontFamily;
+        if (!FONT_FAMILY_OPTIONS.some((option) => option.value === currentFont)) {
+            const customOption = doc.createElement('option');
+            customOption.value = currentFont;
+            customOption.textContent = currentFont;
+            select.appendChild(customOption);
+        }
+        select.value = currentFont;
+        select.addEventListener('change', (event) => {
+            event.stopPropagation();
+            const value = (event.target as HTMLSelectElement).value;
+            this.updateFontFamily(value);
+            this.scheduleOverlayAutoHide();
+        });
+        select.addEventListener('pointerdown', (event) => {
+            event.stopPropagation();
+        });
+        select.addEventListener('touchstart', (event) => {
+            event.stopPropagation();
+        });
+        selectWrapper.appendChild(select);
+        typographyGroup.appendChild(selectWrapper);
+        overlay.appendChild(typographyGroup);
+        this.fontSelectEl = select;
+
+        const zenGroup = doc.createElement('div');
+        zenGroup.classList.add('obsidianr-overlay-group');
+        const zenButton = this.createOverlayButton(doc, 'moon', 'Toggle zen mode', () => {
+            this.toggleZenMode();
+        });
+        zenButton.classList.add('obsidianr-overlay-toggle');
+        zenGroup.appendChild(zenButton);
+        overlay.appendChild(zenGroup);
+        this.zenToggleButtonEl = zenButton;
+
+        viewport.appendChild(overlay);
+        this.overlayEl = overlay;
+
+        overlay.addEventListener('pointerenter', this.handleOverlayPointerEnter);
+        overlay.addEventListener('pointerleave', this.handleOverlayPointerLeave);
+        overlay.addEventListener('pointerdown', this.handleOverlayPointerDown);
+        overlay.addEventListener('focusin', this.handleOverlayFocusIn);
+        overlay.addEventListener('focusout', this.handleOverlayFocusOut);
+
+        this.syncOverlayControls();
+    }
+
+    private createOverlayButton(doc: Document, icon: string, label: string, action: () => void): HTMLButtonElement {
+        const button = doc.createElement('button');
+        button.type = 'button';
+        button.classList.add('obsidianr-overlay-button');
+        button.setAttribute('aria-label', label);
+        button.title = label;
+        setIcon(button, icon);
+        button.addEventListener('pointerdown', (event) => {
+            event.stopPropagation();
+        });
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.state.markInteraction();
+            action();
+            this.scheduleOverlayAutoHide();
+        });
+        return button;
+    }
+
+    private destroyOverlay(): void {
+        this.hideOverlayControls(true);
+        this.clearOverlayTimer();
+        this.overlayHover = false;
+        if (!this.overlayEl) {
+            this.fontSelectEl = null;
+            this.zenToggleButtonEl = null;
+            return;
+        }
+
+        this.overlayEl.removeEventListener('pointerenter', this.handleOverlayPointerEnter);
+        this.overlayEl.removeEventListener('pointerleave', this.handleOverlayPointerLeave);
+        this.overlayEl.removeEventListener('pointerdown', this.handleOverlayPointerDown);
+        this.overlayEl.removeEventListener('focusin', this.handleOverlayFocusIn);
+        this.overlayEl.removeEventListener('focusout', this.handleOverlayFocusOut);
+        this.overlayEl.remove();
+        this.overlayEl = null;
+        this.fontSelectEl = null;
+        this.zenToggleButtonEl = null;
+    }
+
+    private showOverlayControls(): void {
+        if (!this.overlayEl) {
+            return;
+        }
+        this.state.markInteraction();
+        this.overlayEl.classList.add('is-visible');
+        this.overlayEl.setAttribute('aria-hidden', 'false');
+        this.overlayHover = false;
+        if (!this.state.snapshot.overlayVisible) {
+            this.state.update({ overlayVisible: true });
+        }
+        this.updatePageIndicator();
+        this.scheduleOverlayAutoHide();
+    }
+
+    private hideOverlayControls(skipStateUpdate = false): void {
+        if (!this.overlayEl) {
+            return;
+        }
+        this.overlayHover = false;
+        this.overlayEl.classList.remove('is-visible');
+        this.overlayEl.setAttribute('aria-hidden', 'true');
+        this.clearOverlayTimer();
+        if (!skipStateUpdate && this.state.snapshot.overlayVisible) {
+            this.state.update({ overlayVisible: false });
+        }
+        this.updatePageIndicator();
+    }
+
+    private scheduleOverlayAutoHide(): void {
+        if (!this.overlayEl) {
+            return;
+        }
+        this.clearOverlayTimer();
+        this.overlayHideTimeout = window.setTimeout(() => {
+            if (!this.overlayEl) {
+                return;
+            }
+            if (this.overlayHover) {
+                this.scheduleOverlayAutoHide();
+                return;
+            }
+            this.hideOverlayControls();
+        }, OVERLAY_AUTO_HIDE_MS);
+    }
+
+    private clearOverlayTimer(): void {
+        if (this.overlayHideTimeout !== null) {
+            window.clearTimeout(this.overlayHideTimeout);
+            this.overlayHideTimeout = null;
+        }
+    }
+
+    private syncOverlayControls(): void {
+        const snapshot = this.state.snapshot;
+        if (this.fontSelectEl) {
+            const desired = snapshot.parameters.fontFamily;
+            const exists = Array.from(this.fontSelectEl.options).some((option) => option.value === desired);
+            if (!exists) {
+                const optionEl = this.fontSelectEl.ownerDocument.createElement('option');
+                optionEl.value = desired;
+                optionEl.textContent = desired;
+                this.fontSelectEl.appendChild(optionEl);
+            }
+            if (this.fontSelectEl.value !== desired) {
+                this.fontSelectEl.value = desired;
+            }
+        }
+        if (this.zenToggleButtonEl) {
+            const zenEnabled = snapshot.zenMode;
+            this.zenToggleButtonEl.classList.toggle('is-active', zenEnabled);
+            this.zenToggleButtonEl.setAttribute('aria-pressed', zenEnabled ? 'true' : 'false');
+        }
+    }
+
+    private toggleZenMode(): void {
+        this.setZenMode(!this.state.snapshot.zenMode);
+        if (this.state.snapshot.overlayVisible) {
+            this.scheduleOverlayAutoHide();
+        }
+    }
+
+    private setZenMode(enabled: boolean): void {
+        if (this.state.snapshot.zenMode !== enabled) {
+            this.state.update({ zenMode: enabled });
+        }
+        this.applyZenModeClass(enabled);
+        this.syncOverlayControls();
+    }
+
+    private applyZenModeClass(enabled: boolean): void {
+        document.body.classList.toggle(ZEN_BODY_CLASS, enabled);
+    }
+
+    private updateFontFamily(fontFamily: string): void {
+        if (this.state.snapshot.parameters.fontFamily === fontFamily) {
+            return;
+        }
+        this.state.markInteraction();
+        if (this.plugin.settings.fontFamily !== fontFamily) {
+            this.plugin.settings.fontFamily = fontFamily;
+            void this.plugin.saveSettings();
+        }
+        this.updateParameters({ fontFamily });
     }
 
     private attachInteractionHandlers(view: MarkdownView): void {
@@ -312,12 +620,44 @@ export class ReaderManager {
         void view;
     }
 
-    private handleTouchStart(_event: TouchEvent): void {
-        // Placeholder: will implement swipe detection later
+    private handleTouchStart(event: TouchEvent): void {
+        if (!this.state.snapshot.active || event.touches.length !== 1) {
+            return;
+        }
+        const touch = event.touches[0];
+        this.touchStartX = touch.clientX;
+        this.touchStartY = touch.clientY;
+        this.touchStartTime = event.timeStamp;
+        this.state.markInteraction();
+        this.showOverlayControls();
     }
 
-    private handleTouchEnd(_event: TouchEvent): void {
-        // Placeholder
+    private handleTouchEnd(event: TouchEvent): void {
+        if (!this.state.snapshot.active || event.changedTouches.length === 0) {
+            return;
+        }
+        const touch = event.changedTouches[0];
+        const startX = this.touchStartX ?? touch.clientX;
+        const startY = this.touchStartY ?? touch.clientY;
+        const dx = touch.clientX - startX;
+        const dy = touch.clientY - startY;
+        const dt = event.timeStamp - this.touchStartTime;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        const threshold = this.viewportEl ? Math.max(45, this.viewportEl.clientWidth * 0.08) : 45;
+
+        if (dt < 600 && absDx > threshold && absDx > absDy * 1.2) {
+            if (dx < 0) {
+                this.nextPage();
+            } else {
+                this.previousPage();
+            }
+        }
+
+        this.touchStartX = null;
+        this.touchStartY = null;
+        this.touchStartTime = 0;
+        this.scheduleOverlayAutoHide();
     }
 
     private handleKeyDown(event: KeyboardEvent): void {
@@ -462,7 +802,11 @@ export class ReaderManager {
             indicator.style.lineHeight = `${this.pageIndicatorHeight}px`;
             container.style.bottom = `${this.pageIndicatorHeight}px`;
             viewport.dataset.obsidianrIndicatorHeight = `${this.pageIndicatorHeight}`;
+            viewport.style.setProperty('--obsidianr-indicator-height', `${this.pageIndicatorHeight}px`);
             this.updatePageIndicator();
+
+            this.createOverlay(viewport);
+            container.addEventListener('pointerup', this.handleViewportPointerUp);
 
             this.pagination = new PaginationEngine(viewport, container);
             if (typeof ResizeObserver !== 'undefined') {
@@ -488,6 +832,10 @@ export class ReaderManager {
 
         this.flushRenderedContent();
 
+        if (this.contentEl) {
+            this.contentEl.removeEventListener('pointerup', this.handleViewportPointerUp);
+        }
+
         if (this.viewportEl && this.originalViewportStyles) {
             const original = this.originalViewportStyles;
             this.viewportEl.style.overflow = original.overflow ?? '';
@@ -496,6 +844,7 @@ export class ReaderManager {
             this.viewportEl.style.paddingRight = original.paddingRight ?? '';
             this.viewportEl.style.paddingTop = original.paddingTop ?? '';
             this.viewportEl.style.paddingBottom = original.paddingBottom ?? '';
+            this.viewportEl.style.removeProperty('--obsidianr-indicator-height');
         }
 
         if (this.contentEl && this.originalContentStyles) {
@@ -552,6 +901,8 @@ export class ReaderManager {
         }
         this.pageIndicatorEl = null;
         this.pageIndicatorHeight = 0;
+
+        this.destroyOverlay();
 
         this.viewportEl = null;
         this.contentEl = null;
