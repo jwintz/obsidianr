@@ -2,6 +2,8 @@ import { MarkdownView, WorkspaceLeaf, Platform, MarkdownRenderer, TFile } from '
 import type ObsidianRPlugin from '../main';
 import { ReaderState, ReaderParameters } from '../core/state';
 import { PaginationEngine } from './pagination';
+import type { BookInfo } from '../books';
+import { logDebug } from '../core/logger';
 
 const BODY_CLASS = 'obsidianr-reader';
 
@@ -25,6 +27,9 @@ export class ReaderManager {
     private pageIndicatorHeight = 0;
     private pendingInitialPage: number | 'last' | null = null;
     private chapterNavigationLock = false;
+    private pendingLeafResolution: number | null = null;
+    private chapterPageCounts: Map<string, number> = new Map();
+    private chapterPageComputePromises: Map<string, Promise<number | null>> = new Map();
 
     constructor(
         private readonly plugin: ObsidianRPlugin,
@@ -44,6 +49,8 @@ export class ReaderManager {
         if (!view) {
             return;
         }
+
+        this.ensurePreviewMode(view);
 
         if (!this.setupView(view)) {
             return;
@@ -72,6 +79,9 @@ export class ReaderManager {
             overlayVisible: false,
             zenMode: false
         });
+
+        this.resetHeaderTitle();
+        this.clearPendingLeafResolution();
 
         if (view) {
             this.detachInteractionHandlers(view);
@@ -111,17 +121,15 @@ export class ReaderManager {
             return;
         }
 
-        let targetView: MarkdownView | null = null;
-        if (leaf && leaf.view instanceof MarkdownView) {
-            targetView = leaf.view;
-        } else {
-            targetView = this.getActiveMarkdownView();
-        }
-
+        const targetView = this.resolveMarkdownView(leaf);
         if (!targetView) {
-            this.disableReaderMode();
+            this.deferLeafResolution();
             return;
         }
+
+        this.clearPendingLeafResolution();
+
+        this.ensurePreviewMode(targetView);
 
         this.activeLeaf = targetView.leaf;
         if (!this.setupView(targetView)) {
@@ -134,6 +142,38 @@ export class ReaderManager {
             pageHeight: 0
         });
         this.schedulePagination(false);
+    }
+
+    private resolveMarkdownView(leaf: WorkspaceLeaf | null): MarkdownView | null {
+        if (leaf && leaf.view instanceof MarkdownView) {
+            return leaf.view;
+        }
+        return this.getActiveMarkdownView();
+    }
+
+    private deferLeafResolution(): void {
+        if (this.pendingLeafResolution !== null) {
+            return;
+        }
+        this.pendingLeafResolution = window.setTimeout(() => {
+            this.pendingLeafResolution = null;
+            if (!this.state.snapshot.active) {
+                return;
+            }
+            const view = this.getActiveMarkdownView();
+            if (view) {
+                this.onActiveLeafChange(view.leaf);
+            } else {
+                this.disableReaderMode();
+            }
+        }, 60);
+    }
+
+    private clearPendingLeafResolution(): void {
+        if (this.pendingLeafResolution !== null) {
+            window.clearTimeout(this.pendingLeafResolution);
+            this.pendingLeafResolution = null;
+        }
     }
 
     private getActiveMarkdownView(): MarkdownView | null {
@@ -210,16 +250,28 @@ export class ReaderManager {
             return;
         }
         const snapshot = this.state.snapshot;
-        const total = snapshot.totalPages;
-        if (!Number.isFinite(total) || total <= 0) {
+        const { current, total } = this.computeGlobalPageProgress(
+            snapshot.currentFile,
+            snapshot.currentPage,
+            snapshot.totalPages
+        );
+
+        if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(current) || current <= 0) {
             this.pageIndicatorEl.textContent = '';
             this.pageIndicatorEl.classList.remove('is-visible');
-            return;
+        } else {
+            this.pageIndicatorEl.textContent = `Page ${current} / ${total}`;
+            this.pageIndicatorEl.classList.add('is-visible');
         }
 
-        const current = Math.min(snapshot.currentPage + 1, total);
-        this.pageIndicatorEl.textContent = `Page ${current} / ${total}`;
-        this.pageIndicatorEl.classList.add('is-visible');
+        if (snapshot.currentFile && this.plugin.books) {
+            const neighbors = this.plugin.books.getChapterNeighbors(snapshot.currentFile);
+            if (neighbors.book) {
+                this.ensureBookPageCounts(neighbors.book);
+            }
+        }
+
+        this.updateHeaderPagesLeft(snapshot.totalPages, snapshot.currentPage);
     }
 
     private attachInteractionHandlers(view: MarkdownView): void {
@@ -305,7 +357,9 @@ export class ReaderManager {
     previousPage(): void {
         const snapshot = this.state.snapshot;
         if (snapshot.currentPage <= 0) {
-            void this.navigateChapter('previous');
+            if (this.hasGlobalPreviousPage()) {
+                void this.navigateChapter('previous');
+            }
             return;
         }
         const prev = snapshot.currentPage - 1;
@@ -517,7 +571,7 @@ export class ReaderManager {
             return;
         }
 
-        console.debug('[ObsidianR] schedulePagination', {
+        logDebug('schedulePagination', {
             preservePosition,
             pendingFrame: this.pendingFrame !== null
         });
@@ -526,7 +580,7 @@ export class ReaderManager {
             this.pendingFrame = null;
             const preserve = this.preservePositionOnFrame;
             this.preservePositionOnFrame = false;
-            console.debug('[ObsidianR] schedulePagination -> rebuild', {
+            logDebug('schedulePagination -> rebuild', {
                 preserve
             });
             this.rebuildPagination(preserve);
@@ -543,7 +597,7 @@ export class ReaderManager {
         const previousOffset = this.pagination.getOffsetForPage(snapshot.currentPage);
         const progress = previousOffset / previousContentHeight;
 
-        console.debug('[ObsidianR] rebuildPagination: before render', {
+        logDebug('rebuildPagination: before render', {
             preservePosition,
             previousContentHeight,
             previousOffset,
@@ -565,7 +619,7 @@ export class ReaderManager {
             }
 
             if (this.state.snapshot.currentFile && this.state.snapshot.currentFile !== targetFile) {
-                console.debug('[ObsidianR] Active file changed during pagination rebuild, aborting render');
+                logDebug('Active file changed during pagination rebuild, aborting render');
                 return;
             }
 
@@ -573,7 +627,15 @@ export class ReaderManager {
             this.pagination.compute(stateAfterRender.parameters);
             const totalPages = this.pagination.getPageCount();
 
-            console.debug('[ObsidianR] pagination computed', {
+            if (targetFile) {
+                this.registerChapterPageCount(targetFile, totalPages);
+                const neighbors = this.plugin.books.getChapterNeighbors(targetFile);
+                if (neighbors.book) {
+                    this.ensureBookPageCounts(neighbors.book);
+                }
+            }
+
+            logDebug('pagination computed', {
                 file: view.file?.path ?? null,
                 totalPages,
                 pageHeight: this.pagination.getPageHeight(),
@@ -616,6 +678,258 @@ export class ReaderManager {
         this.updatePageIndicator();
     }
 
+    private hasGlobalPreviousPage(): boolean {
+        const snapshot = this.state.snapshot;
+        if (!snapshot.currentFile) {
+            return snapshot.currentPage > 0;
+        }
+
+        const catalog = this.plugin.books;
+        if (!catalog) {
+            return snapshot.currentPage > 0;
+        }
+
+        const neighbors = catalog.getChapterNeighbors(snapshot.currentFile);
+        if (neighbors.book) {
+            const firstChapter = neighbors.book.chapters[0]?.file.path;
+            if (firstChapter && firstChapter === snapshot.currentFile.path && snapshot.currentPage <= 0) {
+                return false;
+            }
+        }
+
+        if (snapshot.currentPage > 0) {
+            return true;
+        }
+
+        return Boolean(neighbors.previous);
+    }
+
+    private ensurePreviewMode(view: MarkdownView): void {
+        try {
+            const getMode = typeof view.getMode === 'function' ? view.getMode.bind(view) : null;
+            if (getMode && getMode() === 'preview') {
+                return;
+            }
+
+            const setMode = (view as unknown as { setMode?: (mode: unknown) => void; modes?: { preview?: unknown; }; }).setMode;
+            const previewMode = (view as unknown as { modes?: { preview?: unknown; }; }).modes?.preview;
+            if (setMode && previewMode) {
+                setMode.call(view, previewMode);
+                return;
+            }
+
+            const leaf = view.leaf;
+            if (leaf && typeof leaf.getViewState === 'function' && typeof leaf.setViewState === 'function') {
+                const currentState = leaf.getViewState();
+                const nextState = {
+                    ...currentState,
+                    state: {
+                        ...(currentState.state ?? {}),
+                        mode: 'preview'
+                    }
+                };
+                void leaf.setViewState(nextState);
+            }
+        } catch (error) {
+            console.warn('[ObsidianR] Failed to enforce preview mode', error);
+        }
+    }
+
+    private registerChapterPageCount(file: TFile, totalPages: number): void {
+        if (!file || !Number.isFinite(totalPages) || totalPages <= 0) {
+            return;
+        }
+        const existing = this.chapterPageCounts.get(file.path);
+        if (existing !== totalPages) {
+            this.chapterPageCounts.set(file.path, totalPages);
+        }
+    }
+
+    private ensureBookPageCounts(book: BookInfo): void {
+        if (!this.viewportEl) {
+            return;
+        }
+
+        for (const chapter of book.chapters) {
+            const path = chapter.file.path;
+            if (this.chapterPageCounts.has(path) || this.chapterPageComputePromises.has(path)) {
+                continue;
+            }
+
+            const promise = this.computeChapterPageCount(chapter.file)
+                .then((count) => {
+                    if (typeof count === 'number' && count > 0) {
+                        this.chapterPageCounts.set(path, count);
+                        this.updatePageIndicator();
+                    }
+                    return count;
+                })
+                .catch((error) => {
+                    console.error('[ObsidianR] Failed to precompute chapter pages', {
+                        path,
+                        error
+                    });
+                    return null;
+                })
+                .finally(() => {
+                    this.chapterPageComputePromises.delete(path);
+                });
+
+            this.chapterPageComputePromises.set(path, promise);
+        }
+    }
+
+    private async computeChapterPageCount(file: TFile): Promise<number | null> {
+        if (!this.viewportEl) {
+            return null;
+        }
+
+        const width = Math.max(this.viewportEl.clientWidth, 1);
+        const height = Math.max(this.viewportEl.clientHeight, 1);
+        const doc = this.viewportEl.ownerDocument ?? document;
+        const tempViewport = doc.createElement('div');
+        tempViewport.className = 'markdown-reading-view obsidianr-reader-probe';
+        tempViewport.style.position = 'fixed';
+        tempViewport.style.visibility = 'hidden';
+        tempViewport.style.pointerEvents = 'none';
+        tempViewport.style.left = '0';
+        tempViewport.style.top = '0';
+        tempViewport.style.width = `${width}px`;
+        tempViewport.style.height = `${height}px`;
+        tempViewport.style.overflow = 'hidden';
+        if (this.pageIndicatorHeight > 0) {
+            tempViewport.dataset.obsidianrIndicatorHeight = `${this.pageIndicatorHeight}`;
+        }
+
+        const container = doc.createElement('div');
+        container.classList.add('obsidianr-reader-container', 'markdown-preview-view', 'markdown-rendered');
+        container.style.position = 'absolute';
+        container.style.top = '0';
+        container.style.right = '0';
+        container.style.bottom = '0';
+        container.style.left = '0';
+        container.style.width = '100%';
+        container.style.height = '100%';
+        container.style.overflow = 'hidden';
+        tempViewport.appendChild(container);
+
+        const fragment = doc.createElement('div');
+        fragment.className = 'obsidianr-reader-content';
+        container.appendChild(fragment);
+
+        doc.body.appendChild(tempViewport);
+
+        let engine: PaginationEngine | null = null;
+
+        try {
+            const raw = await this.plugin.app.vault.cachedRead(file);
+            const stripped = this.stripFrontmatter(raw);
+            await MarkdownRenderer.renderMarkdown(stripped, fragment, file.path, this.plugin);
+
+            engine = new PaginationEngine(tempViewport, fragment);
+            const snapshot = engine.compute(this.state.snapshot.parameters);
+            return snapshot.offsets.length;
+        } catch (error) {
+            console.error('[ObsidianR] Failed to measure chapter pages', {
+                path: file.path,
+                error
+            });
+            return null;
+        } finally {
+            try {
+                engine?.destroy();
+            } catch (disposeError) {
+                console.warn('[ObsidianR] Failed to dispose pagination probe', disposeError);
+            }
+            tempViewport.remove();
+        }
+    }
+
+    private computeGlobalPageProgress(
+        file: TFile | null,
+        currentPageIndex: number,
+        fallbackTotal: number
+    ): { current: number; total: number; } {
+        const defaultCurrent = Math.max(1, currentPageIndex + 1);
+        const defaultTotal = Math.max(defaultCurrent, fallbackTotal);
+
+        if (!file) {
+            return { current: defaultCurrent, total: defaultTotal };
+        }
+
+        const catalog = this.plugin.books;
+        if (!catalog) {
+            return { current: defaultCurrent, total: defaultTotal };
+        }
+
+        const { book } = catalog.getChapterNeighbors(file);
+        if (!book) {
+            return { current: defaultCurrent, total: defaultTotal };
+        }
+
+        let total = 0;
+        let current = defaultCurrent;
+        let currentIncluded = false;
+
+        for (const chapter of book.chapters) {
+            const path = chapter.file.path;
+            if (path === file.path) {
+                const chapterPages = this.chapterPageCounts.get(path) ?? fallbackTotal;
+                const safePages = Math.max(1, chapterPages);
+                current = total + Math.min(defaultCurrent, safePages);
+                total += safePages;
+                currentIncluded = true;
+            } else {
+                const chapterPages = this.chapterPageCounts.get(path);
+                if (typeof chapterPages === 'number' && chapterPages > 0) {
+                    total += chapterPages;
+                }
+            }
+        }
+
+        if (!currentIncluded) {
+            total += fallbackTotal > 0 ? fallbackTotal : defaultCurrent;
+        }
+
+        const safeTotal = Math.max(total, defaultTotal);
+        const safeCurrent = Math.min(Math.max(1, current), safeTotal);
+        return { current: safeCurrent, total: safeTotal };
+    }
+
+    private updateHeaderPagesLeft(totalPages: number, currentPage: number): void {
+        const titleEl = this.getHeaderTitleElement();
+        if (!titleEl) {
+            return;
+        }
+
+        const leaf = this.activeLeaf ?? this.getActiveMarkdownView()?.leaf ?? null;
+        const baseTitle = leaf?.getDisplayText?.() ?? titleEl.dataset.obsidianrBaseTitle ?? titleEl.textContent ?? '';
+        titleEl.dataset.obsidianrBaseTitle = baseTitle;
+
+        const pagesLeft = Math.max(0, totalPages - currentPage - 1);
+        const suffix = ` - ${pagesLeft} page${pagesLeft === 1 ? '' : 's'} left in chapter`;
+        titleEl.textContent = `${baseTitle}${suffix}`;
+    }
+
+    private resetHeaderTitle(): void {
+        const titleEl = this.getHeaderTitleElement();
+        if (!titleEl) {
+            return;
+        }
+        const baseTitle = titleEl.dataset.obsidianrBaseTitle ?? titleEl.textContent ?? '';
+        titleEl.textContent = baseTitle;
+        delete titleEl.dataset.obsidianrBaseTitle;
+    }
+
+    private getHeaderTitleElement(): HTMLElement | null {
+        const leaf = this.activeLeaf ?? this.getActiveMarkdownView()?.leaf ?? null;
+        const container = leaf?.view?.containerEl ?? this.viewportEl?.closest('.workspace-leaf') ?? null;
+        if (!container) {
+            return null;
+        }
+        return container.querySelector<HTMLElement>('.view-header-title');
+    }
+
     private async navigateChapter(direction: 'next' | 'previous'): Promise<void> {
         if (this.chapterNavigationLock) {
             return;
@@ -630,7 +944,7 @@ export class ReaderManager {
         const { previous, next } = catalog.getChapterNeighbors(currentFile);
         const target = direction === 'next' ? next : previous;
         if (!target) {
-            console.debug('[ObsidianR] navigateChapter: no adjacent chapter', {
+            logDebug('navigateChapter: no adjacent chapter', {
                 direction,
                 file: currentFile.path
             });
@@ -686,7 +1000,7 @@ export class ReaderManager {
             this.flushRenderedContent();
             const raw = await this.plugin.app.vault.cachedRead(file);
             const stripped = this.stripFrontmatter(raw);
-            console.debug('[ObsidianR] renderActiveFile: start', {
+            logDebug('renderActiveFile: start', {
                 file: file.path,
                 length: raw.length,
                 strippedLength: stripped.length
@@ -699,7 +1013,7 @@ export class ReaderManager {
 
             await MarkdownRenderer.renderMarkdown(stripped, fragment, file.path, view);
 
-            console.debug('[ObsidianR] renderActiveFile: rendered', {
+            logDebug('renderActiveFile: rendered', {
                 file: file.path,
                 childCount: fragment.childElementCount,
                 textLength: fragment.textContent?.length ?? 0

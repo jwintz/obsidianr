@@ -1,4 +1,5 @@
 import { ReaderParameters } from '../core/state';
+import { logDebug } from '../core/logger';
 
 interface LineFragment {
     top: number;
@@ -88,7 +89,7 @@ export class PaginationEngine {
             index === 0 ? 0 : Math.round((offset - offsetsSample[index - 1]) * 100) / 100
         );
         const lastOffset = this.offsets[this.offsets.length - 1] ?? 0;
-        console.debug('[ObsidianR] pagination.compute', {
+        logDebug('pagination.compute', {
             pageHeight: this.pageHeight,
             contentHeight: this.contentHeight,
             scrollHeight: measurementTarget.scrollHeight,
@@ -98,9 +99,9 @@ export class PaginationEngine {
             offsetSteps
         });
         if (this.offsets.length > offsetsSample.length) {
-            console.debug('[ObsidianR] pagination.compute offsets (sample)', offsetsSample, 'steps', offsetSteps);
+            logDebug('pagination.compute offsets (sample)', offsetsSample, 'steps', offsetSteps);
         } else {
-            console.debug('[ObsidianR] pagination.compute offsets (all)', offsetsSample, 'steps', offsetSteps);
+            logDebug('pagination.compute offsets (all)', offsetsSample, 'steps', offsetSteps);
         }
         return snapshot;
     }
@@ -115,7 +116,7 @@ export class PaginationEngine {
 
         if (Math.abs(offset - previousOffset) <= EPSILON) {
             this.contentEl.style.transform = nextTransform;
-            console.debug('[ObsidianR] pagination.applyPage skipped animation', {
+            logDebug('pagination.applyPage skipped animation', {
                 index,
                 offset,
                 previousOffset
@@ -144,7 +145,7 @@ export class PaginationEngine {
         }
 
         const delta = Math.round((offset - previousOffset) * 100) / 100;
-        console.debug('[ObsidianR] pagination.applyPage', {
+        logDebug('pagination.applyPage', {
             index,
             offset,
             previousOffset,
@@ -155,7 +156,7 @@ export class PaginationEngine {
 
         const viewportRect = this.viewportEl.getBoundingClientRect();
         const contentRect = this.contentEl.getBoundingClientRect();
-        console.debug('[ObsidianR] pagination.applyPage layout', {
+        logDebug('pagination.applyPage layout', {
             index,
             viewportHeight: Math.round(viewportRect.height),
             contentHeight: Math.round(contentRect.height),
@@ -526,7 +527,7 @@ export class PaginationEngine {
             const fragments = this.collectFragments();
             if (fragments.length > 0) {
                 const contentRect = measurementTarget.getBoundingClientRect();
-                const { normalizedFragments, contentHeight } = this.normalizeFragments(
+                const { normalizedFragments, contentHeight, maxFragmentBottom } = this.normalizeFragments(
                     fragments,
                     contentRect,
                     availableHeight,
@@ -536,9 +537,11 @@ export class PaginationEngine {
                     normalizedFragments,
                     availableHeight,
                     contentHeight,
-                    guardPadding
+                    guardPadding,
+                    maxFragmentBottom
                 );
                 if (preciseSnapshot) {
+                    this.debugVerifyCoverage(normalizedFragments, preciseSnapshot.offsets, availableHeight);
                     return preciseSnapshot;
                 }
             }
@@ -563,7 +566,11 @@ export class PaginationEngine {
         contentRect: DOMRect,
         availableHeight: number,
         measurementTarget: HTMLElement
-    ): { normalizedFragments: Array<{ top: number; bottom: number; }>; contentHeight: number; } {
+    ): {
+        normalizedFragments: Array<{ top: number; bottom: number; }>;
+        contentHeight: number;
+        maxFragmentBottom: number;
+    } {
         const style = window.getComputedStyle(measurementTarget);
         const declaredColumnCount = parseInt(style.columnCount, 10);
         const columnCount = Number.isNaN(declaredColumnCount) ? 1 : Math.max(1, declaredColumnCount);
@@ -620,15 +627,10 @@ export class PaginationEngine {
             maxBottom = Math.max(maxBottom, fragment.bottom);
         }
 
-        const estimatedColumns = Math.max(1, Math.ceil(maxBottom / availableHeight));
-        const columnHeight = estimatedColumns * availableHeight;
-        const contentHeight = Math.max(
-            maxBottom,
-            columnHeight,
-            this.contentEl.scrollHeight,
-            availableHeight
-        );
-        return { normalizedFragments: deduped, contentHeight };
+        const estimatedColumns = Math.max(1, Math.ceil(maxBottom / Math.max(availableHeight, 1)));
+        const columnHeight = estimatedColumns * Math.max(availableHeight, 1);
+        const contentHeight = Math.max(maxBottom, columnHeight, availableHeight);
+        return { normalizedFragments: deduped, contentHeight, maxFragmentBottom: maxBottom };
     }
 
     private findFragmentBeyondThreshold(
@@ -729,16 +731,19 @@ export class PaginationEngine {
         fragments: Array<{ top: number; bottom: number; }>,
         availableHeight: number,
         contentHeight: number,
-        guardPadding = 0
+        _guardPadding = 0,
+        maxFragmentBottom?: number
     ): PaginationSnapshot | null {
         if (fragments.length === 0 || availableHeight <= 0) {
             return null;
         }
 
         const offsets: number[] = [0];
-        const maxOffset = Math.max(0, contentHeight - availableHeight);
-        const guard = Math.max(0, Math.min(guardPadding, availableHeight - 1));
-        const effectiveHeight = Math.max(1, availableHeight - guard);
+        const effectiveHeight = Math.max(1, availableHeight);
+        const fragmentExtent = typeof maxFragmentBottom === 'number'
+            ? Math.max(maxFragmentBottom, availableHeight)
+            : Math.max(contentHeight, availableHeight);
+        const maxOffset = Math.max(0, fragmentExtent - effectiveHeight);
         let currentOffset = 0;
         let searchIndex = 0;
 
@@ -762,7 +767,8 @@ export class PaginationEngine {
             }
         }
 
-        if (offsets[offsets.length - 1] < maxOffset - EPSILON) {
+        const lastOffset = offsets[offsets.length - 1] ?? 0;
+        if (maxOffset > EPSILON && maxOffset - lastOffset > EPSILON) {
             offsets.push(maxOffset);
         }
 
@@ -794,7 +800,7 @@ export class PaginationEngine {
         return {
             pageHeight: Math.max(effectiveHeight, 1),
             offsets: uniqueOffsets,
-            contentHeight: Math.max(contentHeight, availableHeight)
+            contentHeight: Math.max(fragmentExtent, availableHeight)
         };
     }
 
@@ -802,13 +808,12 @@ export class PaginationEngine {
         snapshot: PaginationSnapshot,
         scrollHeight: number,
         availableHeight: number,
-        guardPadding = 0
+        _guardPadding = 0
     ): PaginationSnapshot {
         const normalizedScrollHeight = Math.max(scrollHeight, availableHeight);
-        const guard = Math.max(0, Math.min(guardPadding, availableHeight - 1));
-        const effectiveAvailableHeight = Math.max(availableHeight - guard, 1);
+        const effectiveAvailableHeight = Math.max(availableHeight, 1);
         const requiredPages = Math.max(1, Math.ceil(normalizedScrollHeight / effectiveAvailableHeight));
-        const maxOffset = Math.max(0, normalizedScrollHeight - availableHeight);
+        const maxOffset = Math.max(0, normalizedScrollHeight - effectiveAvailableHeight);
 
         const offsets: number[] = [];
         for (let pageIndex = 0; pageIndex < requiredPages; pageIndex += 1) {
@@ -832,5 +837,40 @@ export class PaginationEngine {
             offsets,
             contentHeight: normalizedScrollHeight
         };
+    }
+
+    private debugVerifyCoverage(
+        fragments: Array<{ top: number; bottom: number; }>,
+        offsets: number[],
+        availableHeight: number
+    ): void {
+        if (!this.isDebugMode() || fragments.length === 0 || offsets.length === 0) {
+            return;
+        }
+
+        const uncovered = fragments.filter((fragment) => {
+            for (const offset of offsets) {
+                const topVisible = offset - EPSILON;
+                const bottomVisible = offset + availableHeight + EPSILON;
+                if (fragment.top >= topVisible && fragment.bottom <= bottomVisible) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        if (uncovered.length > 0) {
+            console.warn('[ObsidianR] pagination coverage gap detected', {
+                uncovered: uncovered.slice(0, 5),
+                fragmentCount: fragments.length,
+                offsets,
+                availableHeight
+            });
+        }
+    }
+
+    private isDebugMode(): boolean {
+        const globalWindow = window as unknown as { obsidianrDebugPagination?: boolean; };
+        return globalWindow?.obsidianrDebugPagination === true;
     }
 }

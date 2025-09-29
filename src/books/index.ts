@@ -19,10 +19,13 @@ function escapeForAttribute(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+type ChapterKind = 'book' | 'prologue' | 'chapter' | 'epilogue' | 'unknown';
+
 interface ChapterInfo {
     file: TFile;
     order: number;
     title: string;
+    kind: ChapterKind;
 }
 
 interface BookInfo {
@@ -165,10 +168,12 @@ export class BookCatalog {
                 frontmatter = await this.tryParseFrontmatter(file);
             }
 
+            const kind = this.extractChapterKind(frontmatter);
             const chapterInfo: ChapterInfo = {
                 file,
                 order: this.extractChapterOrder(frontmatter, file),
-                title: this.extractChapterTitle(frontmatter, file)
+                title: this.extractChapterTitle(frontmatter, file),
+                kind
             };
             aggregate.chapters.push(chapterInfo);
 
@@ -178,8 +183,7 @@ export class BookCatalog {
                 aggregate.titleVotes.set(normalized, (aggregate.titleVotes.get(normalized) ?? 0) + 1);
             }
 
-            const type = this.extractTypeHint(frontmatter);
-            if (type) {
+            if (kind !== 'unknown') {
                 aggregate.chapterHints += 1;
             }
         }
@@ -219,10 +223,16 @@ export class BookCatalog {
             });
 
             aggregate.chapters.sort((a, b) => {
+                const kindDelta = this.getChapterKindWeight(a.kind) - this.getChapterKindWeight(b.kind);
+                if (kindDelta !== 0) {
+                    return kindDelta;
+                }
+
                 const byOrder = a.order - b.order;
                 if (byOrder !== 0) {
                     return byOrder;
                 }
+
                 return a.title.localeCompare(b.title, undefined, {
                     numeric: true,
                     sensitivity: 'base'
@@ -552,19 +562,57 @@ export class BookCatalog {
         return null;
     }
 
-    private extractTypeHint(frontmatter: Frontmatter): string | null {
+    private extractChapterKind(frontmatter: Frontmatter | null): ChapterKind {
         if (!frontmatter) {
-            return null;
+            return 'unknown';
         }
-        const value = frontmatter.type ?? frontmatter.category ?? frontmatter.kind;
-        if (!value) {
-            return null;
+
+        const candidates = [
+            frontmatter.type,
+            frontmatter.category,
+            frontmatter.kind,
+            (frontmatter as Record<string, unknown>)?.role
+        ];
+
+        const raw = candidates.find((value) =>
+            typeof value === 'string' && value.trim().length > 0
+        );
+
+        if (!raw || typeof raw !== 'string') {
+            return 'unknown';
         }
-        const normalized = value.toString().toLowerCase().trim();
+
+        const normalized = raw.toLowerCase().replace(/[_-]+/g, ' ').replace(/the/g, '').trim();
+
+        if (['book', 'cover', 'volume'].includes(normalized)) {
+            return 'book';
+        }
+        if (['prologue', 'preface', 'introduction', 'foreword'].includes(normalized)) {
+            return 'prologue';
+        }
+        if (['epilogue', 'afterword', 'postface'].includes(normalized)) {
+            return 'epilogue';
+        }
         if (['chapter', 'chapitre', 'part', 'section'].includes(normalized)) {
-            return normalized;
+            return 'chapter';
         }
-        return null;
+
+        return 'unknown';
+    }
+
+    private getChapterKindWeight(kind: ChapterKind): number {
+        switch (kind) {
+            case 'book':
+                return 0;
+            case 'prologue':
+                return 1;
+            case 'chapter':
+                return 2;
+            case 'epilogue':
+                return 3;
+            default:
+                return 4;
+        }
     }
 
     private extractChapterOrder(frontmatter: Frontmatter, file: TFile): number {
@@ -648,3 +696,5 @@ export class BookCatalog {
 export function createBookCatalog(plugin: ObsidianRPlugin): BookCatalog {
     return new BookCatalog(plugin);
 }
+
+export type { BookInfo };
