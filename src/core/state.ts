@@ -70,7 +70,7 @@ export function createInitialState(): ReaderSessionState {
         currentFile: null,
         currentPage: 0,
         totalPages: 0,
-    pageHeight: 0,
+        pageHeight: 0,
         overlayVisible: false,
         zenMode: false,
         lastInteractionTs: Date.now(),

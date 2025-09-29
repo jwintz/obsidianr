@@ -139,7 +139,7 @@ export class PaginationEngine {
                 this.runPageCurlAnimation(previousTransform, nextTransform);
                 break;
             default:
-        this.contentEl.style.transform = nextTransform;
+                this.contentEl.style.transform = nextTransform;
                 break;
         }
 
@@ -278,16 +278,16 @@ export class PaginationEngine {
             this.contentEl.style.backfaceVisibility = '';
         }
 
-    const indicatorHeightAttr = this.viewportEl.dataset?.obsidianrIndicatorHeight;
-    const indicatorHeight = indicatorHeightAttr ? parseFloat(indicatorHeightAttr) || 0 : 0;
+        const indicatorHeightAttr = this.viewportEl.dataset?.obsidianrIndicatorHeight;
+        const indicatorHeight = indicatorHeightAttr ? parseFloat(indicatorHeightAttr) || 0 : 0;
 
-    const horizontalPadding = `${parameters.horizontalMargins}%`;
+        const horizontalPadding = `${parameters.horizontalMargins}%`;
         viewport.style.paddingLeft = horizontalPadding;
         viewport.style.paddingRight = horizontalPadding;
 
         const verticalPadding = Math.max(16, Math.round(parameters.fontSize * 0.9));
         viewport.style.paddingTop = `${verticalPadding}px`;
-    viewport.style.paddingBottom = `${verticalPadding + indicatorHeight}px`;
+        viewport.style.paddingBottom = `${verticalPadding + indicatorHeight}px`;
 
         const target = this.getMeasurementTarget();
         target.style.fontSize = `${parameters.fontSize}px`;
@@ -332,7 +332,7 @@ export class PaginationEngine {
     }
 
     private resetTransform(): void {
-    this.contentEl.style.transform = 'translate3d(0, 0, 0)';
+        this.contentEl.style.transform = 'translate3d(0, 0, 0)';
     }
 
     private resetAnimationState(): void {
@@ -344,8 +344,8 @@ export class PaginationEngine {
             this.activeAnimation.cancel();
             this.activeAnimation = null;
         }
-    this.contentEl.style.opacity = '1';
-    this.contentEl.style.transformOrigin = '';
+        this.contentEl.style.opacity = '1';
+        this.contentEl.style.transformOrigin = '';
     }
 
     private runTransformAnimation(
@@ -517,10 +517,10 @@ export class PaginationEngine {
             return { pageHeight: 0, offsets: [0], contentHeight: 0 };
         }
 
-    const measurementTarget = this.getMeasurementTarget();
-    const measurementStyle = window.getComputedStyle(measurementTarget);
-    const guardPadding = Math.max(0, parseFloat(measurementStyle.paddingBottom) || 0);
-    const scrollHeight = Math.max(availableHeight, measurementTarget.scrollHeight);
+        const measurementTarget = this.getMeasurementTarget();
+        const measurementStyle = window.getComputedStyle(measurementTarget);
+        const guardPadding = Math.max(0, parseFloat(measurementStyle.paddingBottom) || 0);
+        const scrollHeight = Math.max(availableHeight, measurementTarget.scrollHeight);
 
         try {
             const fragments = this.collectFragments();
@@ -563,7 +563,7 @@ export class PaginationEngine {
         contentRect: DOMRect,
         availableHeight: number,
         measurementTarget: HTMLElement
-    ): { normalizedFragments: Array<{ top: number; bottom: number }>; contentHeight: number } {
+    ): { normalizedFragments: Array<{ top: number; bottom: number; }>; contentHeight: number; } {
         const style = window.getComputedStyle(measurementTarget);
         const declaredColumnCount = parseInt(style.columnCount, 10);
         const columnCount = Number.isNaN(declaredColumnCount) ? 1 : Math.max(1, declaredColumnCount);
@@ -607,7 +607,7 @@ export class PaginationEngine {
         });
 
         let maxBottom = 0;
-        const deduped: Array<{ top: number; bottom: number }> = [];
+        const deduped: Array<{ top: number; bottom: number; }> = [];
         for (const fragment of normalized) {
             if (
                 deduped.length > 0 &&
@@ -632,7 +632,7 @@ export class PaginationEngine {
     }
 
     private findFragmentBeyondThreshold(
-        fragments: Array<{ top: number; bottom: number }>,
+        fragments: Array<{ top: number; bottom: number; }>,
         threshold: number,
         startIndex: number
     ): number {
@@ -649,8 +649,8 @@ export class PaginationEngine {
     }
 
     private collectFragments(): LineFragment[] {
-    const measurementTarget = this.getMeasurementTarget();
-    const rects: LineFragment[] = [];
+        const measurementTarget = this.getMeasurementTarget();
+        const rects: LineFragment[] = [];
         const walker = document.createTreeWalker(
             measurementTarget,
             NodeFilter.SHOW_TEXT,
@@ -726,7 +726,7 @@ export class PaginationEngine {
     }
 
     private buildSnapshotFromFragments(
-        fragments: Array<{ top: number; bottom: number }>,
+        fragments: Array<{ top: number; bottom: number; }>,
         availableHeight: number,
         contentHeight: number,
         guardPadding = 0
