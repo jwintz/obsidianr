@@ -56,12 +56,21 @@ export class BookCatalog {
     private books: Map<string, BookInfo> = new Map();
     private cleanupFns: Array<() => void> = [];
     private badgeTemplate: HTMLElement | null = null;
+    private explorerAwaitingLayout = false;
+    private explorerLayoutListenerRegistered = false;
+    private explorerObserver: MutationObserver | null = null;
     private readonly scheduleScan = debounce(() => {
         void this.recomputeBooks();
     }, 400);
     private readonly updateExplorer = debounce(() => this.renderExplorerBadges(), 120);
     private readonly handleVaultChange = () => this.scheduleScan();
     private readonly handleMetadataChange = () => this.scheduleScan();
+    private readonly handleExplorerMutations = (mutations: MutationRecord[]): void => {
+        if (this.shouldIgnoreExplorerMutations(mutations)) {
+            return;
+        }
+        this.renderExplorerBadges();
+    };
 
     constructor(private readonly plugin: ObsidianRPlugin) { }
 
@@ -249,25 +258,55 @@ export class BookCatalog {
     }
 
     private decorateFileExplorer(): void {
+        this.ensureExplorerLayoutListener();
+
         const explorer = this.getFileExplorerView();
         if (!explorer) {
-            this.plugin.app.workspace.onLayoutReady(() => this.decorateFileExplorer());
+            if (!this.plugin.app.workspace.layoutReady) {
+                if (this.explorerAwaitingLayout) {
+                    return;
+                }
+                this.explorerAwaitingLayout = true;
+                this.plugin.app.workspace.onLayoutReady(() => {
+                    this.explorerAwaitingLayout = false;
+                    this.decorateFileExplorer();
+                });
+            }
             return;
         }
 
         const container = (explorer as unknown as { containerEl?: HTMLElement; }).containerEl;
         if (container instanceof HTMLElement) {
-            const observer = new MutationObserver((mutations) => {
-                if (this.shouldIgnoreExplorerMutations(mutations)) {
-                    return;
-                }
-                this.renderExplorerBadges();
-            });
-            observer.observe(container, { childList: true, subtree: true });
-            this.cleanupFns.push(() => observer.disconnect());
+            this.ensureExplorerObserver(container);
         }
 
         this.renderExplorerBadges();
+    }
+
+    private ensureExplorerLayoutListener(): void {
+        if (this.explorerLayoutListenerRegistered) {
+            return;
+        }
+        this.explorerLayoutListenerRegistered = true;
+        this.plugin.registerEvent(this.plugin.app.workspace.on('layout-change', () => {
+            this.decorateFileExplorer();
+            this.updateExplorer();
+        }));
+    }
+
+    private ensureExplorerObserver(container: HTMLElement): void {
+        if (!this.explorerObserver) {
+            this.explorerObserver = new MutationObserver(this.handleExplorerMutations);
+            this.cleanupFns.push(() => {
+                if (this.explorerObserver) {
+                    this.explorerObserver.disconnect();
+                    this.explorerObserver = null;
+                }
+            });
+        }
+
+        this.explorerObserver.disconnect();
+        this.explorerObserver.observe(container, { childList: true, subtree: true });
     }
 
     private getFileExplorerView(): FileExplorerView | null {
