@@ -4,17 +4,11 @@ import { ReaderState, ReaderParameters } from '../core/state';
 import { PaginationEngine } from './pagination';
 import type { BookInfo } from '../books';
 import { logDebug } from '../core/logger';
+import { FONT_CHOICES, normalizeFontFamily } from '../core/fonts';
 
 const BODY_CLASS = 'obsidianr-reader';
 const ZEN_BODY_CLASS = 'obsidianr-zen';
 const OVERLAY_AUTO_HIDE_MS = 5000;
-
-const FONT_FAMILY_OPTIONS: Array<{ value: string; label: string; }> = [
-    { value: 'inherit', label: 'System default' },
-    { value: 'serif', label: 'Serif' },
-    { value: 'sans-serif', label: 'Sans serif' },
-    { value: 'monospace', label: 'Monospace' }
-];
 
 export class ReaderManager {
     private activeLeaf: WorkspaceLeaf | null = null;
@@ -37,6 +31,7 @@ export class ReaderManager {
     private pendingInitialPage: number | 'last' | null = null;
     private chapterNavigationLock = false;
     private pendingLeafResolution: number | null = null;
+    private leafResolutionAttempts = 0;
     private chapterPageCounts: Map<string, number> = new Map();
     private chapterPageComputePromises: Map<string, Promise<number | null>> = new Map();
     private overlayEl: HTMLElement | null = null;
@@ -44,6 +39,7 @@ export class ReaderManager {
     private overlayHover = false;
     private fontSelectEl: HTMLSelectElement | null = null;
     private zenToggleButtonEl: HTMLButtonElement | null = null;
+    private bookmarkToggleButtonEl: HTMLButtonElement | null = null;
     private touchStartX: number | null = null;
     private touchStartY: number | null = null;
     private touchStartTime = 0;
@@ -188,6 +184,15 @@ export class ReaderManager {
             return;
         }
 
+        const container = leaf?.view?.containerEl ?? null;
+        if (container?.classList.contains('obsidianr-bookmarks-leaf')) {
+            return;
+        }
+
+        if (container?.querySelector('[data-obsidianr-bookmarks-host="true"]')) {
+            return;
+        }
+
         const targetView = this.resolveMarkdownView(leaf);
         if (!targetView) {
             this.deferLeafResolution();
@@ -222,6 +227,12 @@ export class ReaderManager {
         if (this.pendingLeafResolution !== null) {
             return;
         }
+        this.leafResolutionAttempts = 0;
+        this.scheduleLeafResolutionAttempt();
+    }
+
+    private scheduleLeafResolutionAttempt(): void {
+        const delay = Math.min(180, 80 + this.leafResolutionAttempts * 40);
         this.pendingLeafResolution = window.setTimeout(() => {
             this.pendingLeafResolution = null;
             if (!this.state.snapshot.active) {
@@ -229,11 +240,25 @@ export class ReaderManager {
             }
             const view = this.getActiveMarkdownView();
             if (view) {
+                this.leafResolutionAttempts = 0;
                 this.onActiveLeafChange(view.leaf);
-            } else {
-                this.disableReaderMode();
+                return;
             }
-        }, 60);
+
+            if (this.chapterNavigationLock || this.pendingInitialPage !== null) {
+                this.scheduleLeafResolutionAttempt();
+                return;
+            }
+
+            this.leafResolutionAttempts += 1;
+            if (this.leafResolutionAttempts < 6) {
+                this.scheduleLeafResolutionAttempt();
+                return;
+            }
+
+            this.leafResolutionAttempts = 0;
+            this.disableReaderMode();
+        }, delay);
     }
 
     private clearPendingLeafResolution(): void {
@@ -241,6 +266,7 @@ export class ReaderManager {
             window.clearTimeout(this.pendingLeafResolution);
             this.pendingLeafResolution = null;
         }
+        this.leafResolutionAttempts = 0;
     }
 
     private getActiveMarkdownView(): MarkdownView | null {
@@ -254,12 +280,13 @@ export class ReaderManager {
         }
 
         const target = this.contentEl.querySelector<HTMLElement>('.obsidianr-reader-content') ?? this.contentEl;
+        const normalizedFont = normalizeFontFamily(parameters.fontFamily);
 
         target.style.fontSize = `${parameters.fontSize}px`;
         target.style.lineHeight = `${parameters.lineSpacing}`;
         target.style.letterSpacing = `${parameters.letterSpacing}em`;
         target.style.wordSpacing = `${parameters.wordSpacing}em`;
-        target.style.fontFamily = parameters.fontFamily;
+        target.style.fontFamily = normalizedFont;
         target.classList.toggle('is-justified', parameters.justified);
 
         const guardPadding = Math.max(12, Math.round(parameters.fontSize * 0.6));
@@ -295,7 +322,6 @@ export class ReaderManager {
             if (Math.abs(desiredHeight - this.pageIndicatorHeight) > 0.5) {
                 this.pageIndicatorHeight = desiredHeight;
                 this.pageIndicatorEl.style.height = `${desiredHeight}px`;
-                this.pageIndicatorEl.style.lineHeight = `${desiredHeight}px`;
                 if (this.contentEl) {
                     this.contentEl.style.bottom = `${desiredHeight}px`;
                 }
@@ -310,9 +336,12 @@ export class ReaderManager {
 
     private computePageIndicatorHeight(viewport: HTMLElement): number {
         const doc = viewport.ownerDocument ?? document;
+        const profile = doc.querySelector<HTMLElement>('.workspace-sidedock-vault-profile');
+        const profileHeight = profile ? Math.round(profile.getBoundingClientRect().height) : 0;
         const leafHeader = viewport.closest('.workspace-leaf')?.querySelector<HTMLElement>('.view-header-title-container');
         const header = leafHeader ?? doc.querySelector<HTMLElement>('.view-header-title-container');
-        const observed = header?.offsetHeight ?? header?.clientHeight ?? 0;
+        const headerHeight = header?.offsetHeight ?? header?.clientHeight ?? 0;
+        const observed = profileHeight || headerHeight;
         const indicator = Math.max(24, Math.round(observed || 0));
         return Number.isFinite(indicator) ? indicator : 32;
     }
@@ -374,22 +403,22 @@ export class ReaderManager {
 
         const typographyGroup = doc.createElement('div');
         typographyGroup.classList.add('obsidianr-overlay-group');
-        typographyGroup.appendChild(this.createOverlayButton(doc, 'minus', 'Decrease font size', () => this.decreaseFont()));
-        typographyGroup.appendChild(this.createOverlayButton(doc, 'plus', 'Increase font size', () => this.increaseFont()));
+        typographyGroup.appendChild(this.createOverlayButton(doc, 'a-arrow-down', 'Decrease font size', () => this.decreaseFont()));
+        typographyGroup.appendChild(this.createOverlayButton(doc, 'a-arrow-up', 'Increase font size', () => this.increaseFont()));
 
         const selectWrapper = doc.createElement('div');
         selectWrapper.classList.add('obsidianr-overlay-select-wrapper');
         const select = doc.createElement('select');
         select.classList.add('obsidianr-overlay-select');
         select.setAttribute('aria-label', 'Font family');
-        for (const option of FONT_FAMILY_OPTIONS) {
+        for (const option of FONT_CHOICES) {
             const optionEl = doc.createElement('option');
             optionEl.value = option.value;
             optionEl.textContent = option.label;
             select.appendChild(optionEl);
         }
-        const currentFont = this.state.snapshot.parameters.fontFamily;
-        if (!FONT_FAMILY_OPTIONS.some((option) => option.value === currentFont)) {
+        const currentFont = normalizeFontFamily(this.state.snapshot.parameters.fontFamily);
+        if (!FONT_CHOICES.some((option) => option.value === currentFont)) {
             const customOption = doc.createElement('option');
             customOption.value = currentFont;
             customOption.textContent = currentFont;
@@ -413,9 +442,19 @@ export class ReaderManager {
         overlay.appendChild(typographyGroup);
         this.fontSelectEl = select;
 
+        const bookmarkGroup = doc.createElement('div');
+        bookmarkGroup.classList.add('obsidianr-overlay-group');
+        const bookmarkButton = this.createOverlayButton(doc, 'bookmark', 'Toggle bookmark for current page', () => {
+            this.toggleBookmark();
+        });
+        bookmarkButton.classList.add('obsidianr-overlay-toggle');
+        bookmarkGroup.appendChild(bookmarkButton);
+        overlay.appendChild(bookmarkGroup);
+        this.bookmarkToggleButtonEl = bookmarkButton;
+
         const zenGroup = doc.createElement('div');
         zenGroup.classList.add('obsidianr-overlay-group');
-        const zenButton = this.createOverlayButton(doc, 'moon', 'Toggle zen mode', () => {
+        const zenButton = this.createOverlayButton(doc, 'eye', 'Toggle zen mode', () => {
             this.toggleZenMode();
         });
         zenButton.classList.add('obsidianr-overlay-toggle');
@@ -474,6 +513,7 @@ export class ReaderManager {
         this.overlayEl = null;
         this.fontSelectEl = null;
         this.zenToggleButtonEl = null;
+        this.bookmarkToggleButtonEl = null;
     }
 
     private showOverlayControls(): void {
@@ -532,7 +572,7 @@ export class ReaderManager {
     private syncOverlayControls(): void {
         const snapshot = this.state.snapshot;
         if (this.fontSelectEl) {
-            const desired = snapshot.parameters.fontFamily;
+            const desired = normalizeFontFamily(snapshot.parameters.fontFamily);
             const exists = Array.from(this.fontSelectEl.options).some((option) => option.value === desired);
             if (!exists) {
                 const optionEl = this.fontSelectEl.ownerDocument.createElement('option');
@@ -549,10 +589,31 @@ export class ReaderManager {
             this.zenToggleButtonEl.classList.toggle('is-active', zenEnabled);
             this.zenToggleButtonEl.setAttribute('aria-pressed', zenEnabled ? 'true' : 'false');
         }
+        if (this.bookmarkToggleButtonEl) {
+            const bookmarked = this.plugin.isPageBookmarked(snapshot.currentFile ?? null, snapshot.currentPage);
+            this.bookmarkToggleButtonEl.classList.toggle('is-active', bookmarked);
+            this.bookmarkToggleButtonEl.setAttribute('aria-pressed', bookmarked ? 'true' : 'false');
+        }
     }
 
     private toggleZenMode(): void {
         this.setZenMode(!this.state.snapshot.zenMode);
+        if (this.state.snapshot.overlayVisible) {
+            this.scheduleOverlayAutoHide();
+        }
+    }
+
+    private toggleBookmark(): void {
+        const snapshot = this.state.snapshot;
+        if (!snapshot.currentFile) {
+            return;
+        }
+        this.state.markInteraction();
+        const isActive = this.plugin.toggleBookmarkFor(snapshot.currentFile, snapshot.currentPage);
+        if (this.bookmarkToggleButtonEl) {
+            this.bookmarkToggleButtonEl.classList.toggle('is-active', isActive);
+            this.bookmarkToggleButtonEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        }
         if (this.state.snapshot.overlayVisible) {
             this.scheduleOverlayAutoHide();
         }
@@ -571,15 +632,16 @@ export class ReaderManager {
     }
 
     private updateFontFamily(fontFamily: string): void {
-        if (this.state.snapshot.parameters.fontFamily === fontFamily) {
+        const normalized = normalizeFontFamily(fontFamily);
+        if (this.state.snapshot.parameters.fontFamily === normalized) {
             return;
         }
         this.state.markInteraction();
-        if (this.plugin.settings.fontFamily !== fontFamily) {
-            this.plugin.settings.fontFamily = fontFamily;
+        if (this.plugin.settings.fontFamily !== normalized) {
+            this.plugin.settings.fontFamily = normalized;
             void this.plugin.saveSettings();
         }
-        this.updateParameters({ fontFamily });
+        this.updateParameters({ fontFamily: normalized });
     }
 
     private attachInteractionHandlers(view: MarkdownView): void {
@@ -799,7 +861,6 @@ export class ReaderManager {
             this.pageIndicatorEl = indicator;
             this.pageIndicatorHeight = this.computePageIndicatorHeight(viewport);
             indicator.style.height = `${this.pageIndicatorHeight}px`;
-            indicator.style.lineHeight = `${this.pageIndicatorHeight}px`;
             container.style.bottom = `${this.pageIndicatorHeight}px`;
             viewport.dataset.obsidianrIndicatorHeight = `${this.pageIndicatorHeight}`;
             viewport.style.setProperty('--obsidianr-indicator-height', `${this.pageIndicatorHeight}px`);
@@ -938,6 +999,65 @@ export class ReaderManager {
         });
     }
 
+    async openChapter(target: TFile, page: number | 'last' = 0): Promise<void> {
+        if (!target) {
+            return;
+        }
+
+        this.state.markInteraction();
+        const leaf = this.activeLeaf ?? this.getActiveMarkdownView()?.leaf ?? null;
+        const desiredPage = page;
+
+        const applyInPlace = (pageIndex: number): void => {
+            const snapshot = this.state.snapshot;
+            const total = Math.max(1, snapshot.totalPages);
+            const clamped = Math.min(Math.max(pageIndex, 0), total - 1);
+            if (clamped !== snapshot.currentPage) {
+                this.state.update({ currentPage: clamped });
+                this.applyCurrentPage();
+            }
+        };
+
+        const currentFile = this.state.snapshot.currentFile;
+        if (currentFile && currentFile.path === target.path) {
+            if (desiredPage === 'last') {
+                applyInPlace(Math.max(this.state.snapshot.totalPages - 1, 0));
+            } else {
+                applyInPlace(Math.round(desiredPage));
+            }
+            this.pendingInitialPage = null;
+            return;
+        }
+
+        const pendingPage = desiredPage === 'last'
+            ? 'last'
+            : Math.max(0, Math.round(typeof desiredPage === 'number' ? desiredPage : 0));
+
+        this.pendingInitialPage = pendingPage;
+
+        if (!leaf) {
+            await this.plugin.app.workspace.getLeaf(false)?.openFile(target, { active: true });
+            return;
+        }
+
+        if (this.chapterNavigationLock) {
+            return;
+        }
+
+        this.chapterNavigationLock = true;
+        try {
+            await leaf.openFile(target, { active: true });
+        } catch (error) {
+            console.error('[ObsidianR] Failed to open requested chapter', {
+                target: target.path,
+                error
+            });
+            this.pendingInitialPage = null;
+        } finally {
+            this.chapterNavigationLock = false;
+        }
+    }
+
     private rebuildPagination(preservePosition: boolean): void {
         if (!this.pagination || !this.viewportEl || !this.contentEl) {
             return;
@@ -978,8 +1098,9 @@ export class ReaderManager {
             this.pagination.compute(stateAfterRender.parameters);
             const totalPages = this.pagination.getPageCount();
 
+            let stableTotalPages = totalPages;
             if (targetFile) {
-                this.registerChapterPageCount(targetFile, totalPages);
+                stableTotalPages = this.registerChapterPageCount(targetFile, totalPages);
                 const neighbors = this.plugin.books.getChapterNeighbors(targetFile);
                 if (neighbors.book) {
                     this.ensureBookPageCounts(neighbors.book);
@@ -1009,9 +1130,9 @@ export class ReaderManager {
                 targetPage = Math.min(stateAfterRender.currentPage, Math.max(totalPages - 1, 0));
             }
 
-            const clampedPage = Math.min(Math.max(targetPage, 0), Math.max(totalPages - 1, 0));
+            const clampedPage = Math.min(Math.max(targetPage, 0), Math.max(stableTotalPages - 1, 0));
             this.state.update({
-                totalPages,
+                totalPages: stableTotalPages,
                 currentPage: clampedPage,
                 pageHeight: this.pagination.getPageHeight()
             });
@@ -1027,6 +1148,7 @@ export class ReaderManager {
         }
         this.pagination.applyPage(this.state.snapshot.currentPage);
         this.updatePageIndicator();
+        this.syncOverlayControls();
     }
 
     private hasGlobalPreviousPage(): boolean {
@@ -1086,14 +1208,14 @@ export class ReaderManager {
         }
     }
 
-    private registerChapterPageCount(file: TFile, totalPages: number): void {
+    private registerChapterPageCount(file: TFile, totalPages: number): number {
         if (!file || !Number.isFinite(totalPages) || totalPages <= 0) {
-            return;
+            const existing = file ? this.chapterPageCounts.get(file.path) : undefined;
+            return existing ?? Math.max(1, Math.round(totalPages) || 1);
         }
-        const existing = this.chapterPageCounts.get(file.path);
-        if (existing !== totalPages) {
-            this.chapterPageCounts.set(file.path, totalPages);
-        }
+        const normalized = Math.max(1, Math.round(totalPages));
+        this.chapterPageCounts.set(file.path, normalized);
+        return normalized;
     }
 
     private ensureBookPageCounts(book: BookInfo): void {
@@ -1110,7 +1232,8 @@ export class ReaderManager {
             const promise = this.computeChapterPageCount(chapter.file)
                 .then((count) => {
                     if (typeof count === 'number' && count > 0) {
-                        this.chapterPageCounts.set(path, count);
+                        const normalized = Math.max(1, Math.round(count));
+                        this.chapterPageCounts.set(path, normalized);
                         this.updatePageIndicator();
                     }
                     return count;

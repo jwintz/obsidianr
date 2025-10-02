@@ -1,4 +1,5 @@
 import { Events, TFile } from 'obsidian';
+import { DEFAULT_FONT_FAMILY, normalizeFontFamily } from './fonts';
 
 export interface ReaderParameters {
     fontSize: number;
@@ -31,7 +32,13 @@ export class ReaderState extends Events {
 
     constructor(initial: ReaderSessionState) {
         super();
-        this.state = initial;
+        this.state = {
+            ...initial,
+            parameters: {
+                ...initial.parameters,
+                fontFamily: normalizeFontFamily(initial.parameters.fontFamily)
+            }
+        };
     }
 
     get snapshot(): ReaderSessionState {
@@ -40,12 +47,18 @@ export class ReaderState extends Events {
 
     update(partial: Partial<ReaderSessionState>): void {
         const prev = this.snapshot;
+        const normalizedParameters = {
+            ...this.state.parameters,
+            ...(partial.parameters ?? {})
+        };
+
+        normalizedParameters.fontFamily = normalizeFontFamily(normalizedParameters.fontFamily);
+
         this.state = {
             ...this.state,
             ...partial,
             parameters: {
-                ...this.state.parameters,
-                ...(partial.parameters ?? {})
+                ...normalizedParameters
             }
         };
         this.trigger('changed', this.snapshot, prev);
@@ -84,7 +97,7 @@ export function createInitialState(): ReaderSessionState {
             horizontalMargins: 12,
             justified: true,
             transitionType: 'none',
-            fontFamily: 'inherit'
+            fontFamily: DEFAULT_FONT_FAMILY
         }
     };
 }

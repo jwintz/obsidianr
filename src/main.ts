@@ -1,4 +1,4 @@
-import { Plugin, WorkspaceLeaf, addIcon } from 'obsidian';
+import { Plugin, WorkspaceLeaf, TFile, addIcon, debounce } from 'obsidian';
 import { ReaderManager, createReaderManager } from './reader/manager';
 import {
     createInitialState,
@@ -15,6 +15,11 @@ import {
     createCommandCenter
 } from './core/commands';
 import { BookCatalog, createBookCatalog } from './books';
+import { ReaderPanelManager, createPanelManager } from './reader/panels/manager';
+import { normalizeFontFamily } from './core/fonts';
+import { BookmarkStore } from './reader/bookmarks';
+import { normalizePersistedData, DATA_VERSION } from './core/data';
+import { ReadingStatisticsTracker } from './reader/panels/statistics-tracker';
 
 const RIBBON_ICON_ID = 'obsidianr-book-open';
 
@@ -29,9 +34,14 @@ export default class ObsidianRPlugin extends Plugin {
     reader!: ReaderManager;
     commands!: CommandCenter;
     books!: BookCatalog;
+    panels!: ReaderPanelManager;
+    bookmarkStore!: BookmarkStore;
+    statisticsTracker!: ReadingStatisticsTracker;
+
+    private saveDataDebounced: (() => void) | null = null;
 
     async onload(): Promise<void> {
-        await this.loadSettings();
+        await this.initializeData();
 
         this.state = new ReaderState(createInitialState());
         this.syncStateWithSettings();
@@ -42,6 +52,8 @@ export default class ObsidianRPlugin extends Plugin {
 
         this.books = createBookCatalog(this);
         await this.books.initialize();
+
+        this.panels = createPanelManager(this, this.state, this.bookmarkStore, this.statisticsTracker);
 
         this.addSettingTab(new ObsidianRSettingTab(this.app, this));
 
@@ -72,17 +84,15 @@ export default class ObsidianRPlugin extends Plugin {
         if (this.reader) {
             this.reader.disableReaderMode();
         }
+        void this.saveDataBundle();
+        this.panels?.dispose();
         this.books?.dispose();
     }
 
-    async loadSettings(): Promise<void> {
-        const loaded = await this.loadData();
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
-    }
-
     async saveSettings(): Promise<void> {
-        await this.saveData(this.settings);
+        this.settings.fontFamily = normalizeFontFamily(this.settings.fontFamily);
         this.syncStateWithSettings();
+        this.requestSave();
     }
 
     refreshReaderModeIfActive(): void {
@@ -96,6 +106,28 @@ export default class ObsidianRPlugin extends Plugin {
 
     decreaseFontTemporarily(): void {
         this.reader.decreaseFont();
+    }
+
+    isPageBookmarked(file: TFile | null, page: number): boolean {
+        return this.panels?.isPageBookmarked(file, page) ?? false;
+    }
+
+    toggleBookmarkFor(file: TFile | null, page: number): boolean {
+        return this.panels?.toggleBookmark(file, page) ?? false;
+    }
+
+    openChapter(target: TFile, page?: number | 'last'): Promise<void> {
+        if (!target || !this.reader) {
+            return Promise.resolve();
+        }
+        return this.reader.openChapter(target, page ?? 0);
+    }
+
+    requestSave(): void {
+        if (!this.saveDataDebounced) {
+            return;
+        }
+        this.saveDataDebounced();
     }
 
     private syncStateWithSettings(): void {
@@ -116,11 +148,32 @@ export default class ObsidianRPlugin extends Plugin {
             horizontalMargins: this.settings.horizontalMargins,
             justified: this.settings.justified,
             transitionType: this.settings.transitionType,
-            fontFamily: this.settings.fontFamily
+            fontFamily: normalizeFontFamily(this.settings.fontFamily)
         };
     }
 
     private handleActiveLeafChange(leaf: WorkspaceLeaf | null): void {
         this.reader.onActiveLeafChange(leaf);
+    }
+
+    private async initializeData(): Promise<void> {
+        const raw = normalizePersistedData(await this.loadData());
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, raw.settings);
+        this.settings.fontFamily = normalizeFontFamily(this.settings.fontFamily);
+        this.bookmarkStore = new BookmarkStore(raw.bookmarks);
+        this.statisticsTracker = new ReadingStatisticsTracker(raw.statistics);
+        this.saveDataDebounced = debounce(() => {
+            void this.saveDataBundle();
+        }, 800);
+    }
+
+    private async saveDataBundle(): Promise<void> {
+        const payload = {
+            version: DATA_VERSION,
+            settings: this.settings,
+            bookmarks: this.bookmarkStore?.serialize() ?? [],
+            statistics: this.statisticsTracker?.serialize() ?? { history: [], activeSession: null }
+        };
+        await this.saveData(payload);
     }
 }

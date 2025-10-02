@@ -42,6 +42,7 @@ body.obsidianr-reader .obsidianr-reader-page-indicator {
 	left: 0;
 	right: 0;
 	bottom: 0;
+	height: var(--obsidianr-indicator-height, 0px);
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -50,6 +51,7 @@ body.obsidianr-reader .obsidianr-reader-page-indicator {
 	letter-spacing: 0.04em;
 	background-color: var(--background-primary);
 	border-top: 1px solid var(--background-modifier-border);
+	line-height: normal;
 	pointer-events: none;
 	z-index: 5;
 }
@@ -66,9 +68,9 @@ body.obsidianr-reader .obsidianr-reader-overlay {
 	justify-content: center;
 	padding: 10px 18px;
 	border-radius: 999px;
-	background-color: rgba(18, 18, 24, 0.6);
-	backdrop-filter: blur(16px);
-	box-shadow: 0 18px 32px rgba(0, 0, 0, 0.35);
+	background-color: rgba(18, 18, 24, 0.48);
+	backdrop-filter: blur(24px) saturate(160%);
+	box-shadow: 0 22px 40px rgba(0, 0, 0, 0.45);
 	opacity: 0;
 	pointer-events: none;
 	transition: opacity 0.18s ease, transform 0.18s ease;
@@ -103,8 +105,8 @@ body.obsidianr-reader .obsidianr-overlay-button {
 }
 
 body.obsidianr-reader .obsidianr-overlay-button svg {
-	width: 18px;
-	height: 18px;
+	width: 24px;
+	height: 24px;
 }
 
 body.obsidianr-reader .obsidianr-overlay-button:hover,
@@ -124,12 +126,18 @@ body.obsidianr-reader .obsidianr-overlay-select-wrapper {
 
 body.obsidianr-reader .obsidianr-overlay-select {
 	appearance: none;
+	-webkit-appearance: none;
+	-moz-appearance: none;
 	background: rgba(255, 255, 255, 0.08);
 	border: none;
 	border-radius: 999px;
-	padding: 6px 28px 6px 12px;
+	height: 36px;
+	min-height: 36px;
+	line-height: 36px;
+	padding: 0 28px 0 12px;
 	color: var(--text-normal);
 	font-size: 0.85em;
+	box-sizing: border-box;
 	cursor: pointer;
 	touch-action: manipulation;
 }
@@ -162,4 +170,341 @@ body.obsidianr-zen .workspace-tab-header-container,
 body.obsidianr-zen .view-header-left,
 body.obsidianr-zen .view-actions {
 	display: none !important;
+}
+
+/* Outline panel */
+.obsidianr-outline-wrapper {
+	margin-bottom: 12px;
+	padding: 12px;
+	border-radius: 12px;
+	background-color: var(--background-secondary);
+	color: var(--text-normal);
+}
+
+body.obsidianr-reader .obsidianr-bookmarks-leaf .view-header {
+	display: none !important;
+}
+
+body.obsidianr-reader .obsidianr-bookmarks-leaf .nav-header {
+	display: none !important;
+}
+
+body.obsidianr-reader .obsidianr-bookmarks-leaf .view-content {
+	display: flex;
+	flex-direction: column;
+	padding: 0;
+}
+
+body.obsidianr-reader .obsidianr-bookmarks-leaf .view-content > *:not(.obsidianr-bookmarks-wrapper) {
+	display: none !important;
+}
+
+body.obsidianr-reader .obsidianr-bookmarks-leaf .bookmarks-container {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+}
+
+body.obsidianr-reader .obsidianr-bookmarks-leaf .bookmarks-container > *:not(.obsidianr-bookmarks-wrapper) {
+	display: none !important;
+}
+
+.obsidianr-outline-header {
+	font-weight: 600;
+	font-size: 0.85em;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	margin-bottom: 8px;
+	color: var(--text-muted);
+}
+
+.obsidianr-outline-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 8px;
+}
+
+.obsidianr-outline-empty {
+	font-size: 0.85em;
+	color: var(--text-muted);
+}
+
+/* Bookmarks panel */
+.obsidianr-bookmarks-wrapper {
+	margin-bottom: 12px;
+	padding: 12px;
+	border-radius: 12px;
+	background-color: var(--background-secondary);
+}
+
+.obsidianr-bookmarks-header {
+	font-weight: 600;
+	font-size: 0.85em;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	margin-bottom: 8px;
+	color: var(--text-muted);
+}
+
+.obsidianr-bookmarks-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 8px;
+}
+
+.obsidianr-bookmarks-empty {
+	font-size: 0.85em;
+	color: var(--text-muted);
+}
+
+.obsidianr-card {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 10px 12px;
+	border-radius: 12px;
+	background-color: rgba(255, 255, 255, 0.04);
+	color: inherit;
+	text-align: left;
+	font-size: 0.92em;
+	line-height: 1.4;
+	transition: background-color 0.15s ease, transform 0.15s ease;
+	user-select: none;
+}
+
+.obsidianr-card:hover,
+.obsidianr-card:focus-visible {
+	background-color: rgba(255, 255, 255, 0.12);
+}
+
+.obsidianr-card:focus-visible {
+	outline: 1px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+.obsidianr-card-title {
+	font-weight: 600;
+	font-size: 1em;
+	color: var(--text-normal);
+}
+
+.obsidianr-card-meta {
+	font-size: 0.78em;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-faint);
+}
+
+.obsidianr-card-preview {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	max-height: 4.2em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: -webkit-box;
+	line-clamp: 3;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+}
+
+.obsidianr-outline-item,
+.obsidianr-bookmarks-item {
+	margin: 0;
+	padding: 0;
+}
+
+.obsidianr-outline-item.is-active .obsidianr-card {
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.obsidianr-outline-item.is-active .obsidianr-card-meta,
+.obsidianr-outline-item.is-active .obsidianr-card-preview,
+.obsidianr-outline-item.is-active .obsidianr-card-title {
+	color: var(--text-on-accent);
+}
+
+/* Statistics panel */
+.obsidianr-stats-view {
+	background-color: var(--background-primary);
+}
+
+.obsidianr-stats-root {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	padding: 16px;
+}
+
+.obsidianr-stats-empty {
+	font-size: 0.9em;
+	color: var(--text-muted);
+}
+
+.obsidianr-stats-section {
+	padding: 12px;
+	border-radius: 12px;
+	background-color: var(--background-secondary);
+}
+
+.obsidianr-stats-section h4 {
+	margin: 0 0 8px;
+	font-size: 0.95em;
+}
+
+.obsidianr-stats-session-card {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 16px;
+	align-items: stretch;
+}
+
+.obsidianr-stats-session-cover {
+	width: 82px;
+	height: 100%;
+	min-height: 120px;
+	object-fit: cover;
+	border-radius: 8px;
+	box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+}
+
+.obsidianr-stats-session-details {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 0.9em;
+	flex: 1;
+}
+
+.obsidianr-stats-session-line {
+	color: var(--text-normal);
+}
+
+.obsidianr-stats-session-cover-wrap {
+	display: flex;
+	align-items: stretch;
+	align-self: stretch;
+}
+
+.obsidianr-stats-session-heading {
+	margin: 0;
+	font-size: 0.95em;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--text-muted);
+}
+
+.obsidianr-stats-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+	gap: 12px;
+}
+
+.obsidianr-stats-card {
+	padding: 12px;
+	border-radius: 12px;
+	background-color: var(--background-secondary);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.obsidianr-stats-card--gauge {
+	align-items: center;
+}
+
+.obsidianr-stats-card h5 {
+	margin: 0;
+	font-size: 0.85em;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--text-muted);
+}
+
+.obsidianr-gauge-block {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+}
+
+.obsidianr-gauge-label {
+	font-size: 0.8em;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--text-muted);
+}
+
+.obsidianr-gauge {
+	position: relative;
+	width: 100%;
+	max-width: 160px;
+	aspect-ratio: 2 / 1;
+}
+
+.obsidianr-gauge-svg {
+	width: 100%;
+	height: auto;
+}
+
+.obsidianr-gauge-arc {
+	fill: none;
+	stroke: rgba(255, 255, 255, 0.12);
+	stroke-width: 10;
+	stroke-linecap: round;
+}
+
+.obsidianr-gauge-arc.is-progress {
+	stroke: var(--interactive-accent);
+	transition: stroke-dashoffset 180ms ease;
+}
+
+.obsidianr-gauge-center {
+	position: absolute;
+	left: 50%;
+	bottom: 6px;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-weight: 600;
+	font-size: 0.95em;
+	color: var(--text-normal);
+}
+
+.obsidianr-gauge-center-text {
+	padding: 2px 10px;
+	border-radius: 999px;
+	background-color: rgba(255, 255, 255, 0.08);
+}
+
+.obsidianr-gauge-summary {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	text-align: center;
+}
+
+.obsidianr-stats-book-list {
+	list-style: none;
+	margin: 4px 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.obsidianr-stats-book-title {
+	font-weight: 500;
+}
+
+.obsidianr-stats-book-duration {
+	float: right;
+	color: var(--text-muted);
+	font-size: 0.85em;
 }

@@ -1,9 +1,7 @@
 This repository is meant to implement a reader mode as an Obsidian plugin, for epub converted set of obsidian notes that form a book. See https://github.com/jwintz/obsidiant for the transcriber.
 
-- Examples are in: ~/Library/Mobile\ Documents/iCloud\~md\~obsidian/D
-ocuments/Vault/Books.
-- Never ever write into ~/Library/Mobile\ Documents/iCloud\~md\~obsidian/D
-ocuments/Vault/ and subfolder
+- Examples are in: ~/Library/Mobile\ Documents/iCloud\~md\~obsidian/Documents/Vault/Books.
+- Never ever write into ~/Library/Mobile\ Documents/iCloud\~md\~obsidian/Documents/Vault/ and subfolder
 - After each coding session, use the `apply` command to build and copy the plugin into the Vault for testing by the user
 
 # Book detection in Vault

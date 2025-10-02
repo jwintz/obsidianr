@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import type ObsidianRPlugin from '../main';
+import { DEFAULT_FONT_FAMILY, FONT_CHOICES, normalizeFontFamily } from '../core/fonts';
 
 export interface ObsidianRSettings {
     justified: boolean;
@@ -24,7 +25,7 @@ export const DEFAULT_SETTINGS: ObsidianRSettings = {
     fontSize: 18,
     transitionType: 'none',
     dailyGoalMinutes: 30,
-    fontFamily: 'inherit'
+    fontFamily: DEFAULT_FONT_FAMILY
 };
 
 export class ObsidianRSettingTab extends PluginSettingTab {
@@ -147,19 +148,18 @@ export class ObsidianRSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setName('Font Family')
             .setDesc('Default font family used in reader mode')
-            .addDropdown((dropdown) =>
-                dropdown
-                    .addOption('inherit', 'System default')
-                    .addOption('serif', 'Serif')
-                    .addOption('sans-serif', 'Sans serif')
-                    .addOption('monospace', 'Monospace')
-                    .setValue(this.plugin.settings.fontFamily)
-                    .onChange(async (value) => {
-                        this.plugin.settings.fontFamily = value;
-                        await this.plugin.saveSettings();
-                        this.plugin.refreshReaderModeIfActive();
-                    })
-            );
+            .addDropdown((dropdown) => {
+                for (const option of FONT_CHOICES) {
+                    dropdown.addOption(option.value, option.label);
+                }
+                const current = normalizeFontFamily(this.plugin.settings.fontFamily);
+                dropdown.setValue(current);
+                dropdown.onChange(async (value) => {
+                    this.plugin.settings.fontFamily = normalizeFontFamily(value);
+                    await this.plugin.saveSettings();
+                    this.plugin.refreshReaderModeIfActive();
+                });
+            });
 
         containerEl.createEl('h3', { text: 'Transitions' });
 

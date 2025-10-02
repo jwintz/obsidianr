@@ -32,6 +32,7 @@ interface BookInfo {
     folder: TFolder;
     title: string;
     chapters: ChapterInfo[];
+    cover: TFile | null;
 }
 
 interface FolderAggregate {
@@ -250,11 +251,33 @@ export class BookCatalog {
             books.set(key, {
                 folder: aggregate.folder,
                 title,
-                chapters: aggregate.chapters
+                chapters: aggregate.chapters,
+                cover: this.findCoverImage(aggregate.folder)
             });
         }
 
         return books;
+    }
+
+    private findCoverImage(folder: TFolder): TFile | null {
+        const candidates: TFile[] = [];
+        folder.children.forEach((child) => {
+            if (child instanceof TFile && this.isImageFile(child)) {
+                candidates.push(child);
+            }
+        });
+        if (candidates.length === 0) {
+            return null;
+        }
+        const prioritized = candidates.find((file) => /cover/i.test(file.name))
+            ?? candidates.find((file) => file.name.toLowerCase().startsWith(folder.name.toLowerCase()))
+            ?? candidates[0];
+        return prioritized;
+    }
+
+    private isImageFile(file: TFile): boolean {
+        const ext = file.extension.toLowerCase();
+        return ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'].includes(ext);
     }
 
     private decorateFileExplorer(): void {
