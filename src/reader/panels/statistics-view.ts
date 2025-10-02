@@ -113,17 +113,17 @@ export class ReaderStatisticsView extends ItemView {
     }
 
     private renderDailySection(root: HTMLElement): void {
-        const section = root.createDiv({ cls: 'obsidianr-stats-section' });
-        section.createEl('h4', { text: 'Daily goal' });
+        const card = root.createDiv({ cls: 'obsidianr-stats-card obsidianr-stats-card--gauge' });
+        card.createEl('h5', { text: 'Daily goal' });
         const daily = this.snapshot?.daily;
         if (!daily) {
-            section.createEl('p', { text: 'No data yet.' });
+            card.createEl('p', { text: 'No data yet.', cls: 'obsidianr-gauge-summary' });
             return;
         }
-        const block = section.createDiv({ cls: 'obsidianr-gauge-block' });
+        const block = card.createDiv({ cls: 'obsidianr-gauge-block' });
         block.createEl('span', { text: 'Today', cls: 'obsidianr-gauge-label' });
         const percent = this.createSemiGauge(block, daily.totalMs, daily.goalMs);
-        const summary = block.createDiv({ cls: 'obsidianr-gauge-summary' });
+        const summary = card.createDiv({ cls: 'obsidianr-gauge-summary' });
         if (daily.goalMs > 0) {
             summary.textContent = `${this.formatDuration(daily.totalMs)} / ${this.formatDuration(daily.goalMs)} (${Math.min(999, percent)}%)`;
         } else {
@@ -150,14 +150,6 @@ export class ReaderStatisticsView extends ItemView {
         const yearlyPercent = this.createGaugeBlock(yearlyCard, 'This year', yearly.totalMs, yearly.goalMs);
         yearlyCard.createEl('p', { text: yearly.goalMs > 0 ? `${this.formatDuration(yearly.totalMs)} / ${this.formatDuration(yearly.goalMs)} (${Math.min(999, yearlyPercent)}%)` : `${this.formatDuration(yearly.totalMs)} read`, cls: 'obsidianr-gauge-summary' });
 
-        if (yearly.books.length > 0) {
-            const list = yearlyCard.createEl('ul', { cls: 'obsidianr-stats-book-list' });
-            for (const book of yearly.books) {
-                const item = list.createEl('li');
-                item.createEl('span', { text: book.title, cls: 'obsidianr-stats-book-title' });
-                item.createEl('span', { text: this.formatDuration(book.totalMs), cls: 'obsidianr-stats-book-duration' });
-            }
-        }
     }
 
     private createGaugeBlock(container: HTMLElement, label: string, totalMs: number, goalMs: number): number {

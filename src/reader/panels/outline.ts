@@ -3,6 +3,8 @@ import type ObsidianRPlugin from '../../main';
 import type { BookInfo } from '../../books';
 
 const WRAPPER_CLASS = 'obsidianr-outline-wrapper';
+const HOST_CLASS = 'obsidianr-outline-host';
+const LEAF_CLASS = 'obsidianr-outline-leaf';
 const ACTIVE_CLASS = 'is-active';
 const PREVIEW_LENGTH = 220;
 
@@ -20,10 +22,16 @@ export class OutlinePanelController {
         }
         this.detach();
         this.leaf = leaf;
+        const containerEl = leaf.view?.containerEl;
+        if (containerEl) {
+            containerEl.classList.add(LEAF_CLASS);
+        }
         const container = this.resolveHostContainer(leaf);
         if (!container) {
             return;
         }
+        container.dataset.obsidianrOutlineHost = 'true';
+        container.classList.add(HOST_CLASS);
         const wrapper = container.ownerDocument.createElement('div');
         wrapper.classList.add(WRAPPER_CLASS);
         container.insertBefore(wrapper, container.firstChild);
@@ -35,6 +43,16 @@ export class OutlinePanelController {
             this.wrapperEl.remove();
             this.wrapperEl = null;
         }
+        if (this.leaf) {
+            const host = this.resolveHostContainer(this.leaf);
+            if (host) {
+                delete host.dataset.obsidianrOutlineHost;
+                host.classList.remove(HOST_CLASS);
+            }
+        }
+        if (this.leaf?.view?.containerEl) {
+            this.leaf.view.containerEl.classList.remove(LEAF_CLASS);
+        }
         this.leaf = null;
         this.previewTickets.clear();
     }
@@ -45,11 +63,6 @@ export class OutlinePanelController {
         }
         const doc = this.wrapperEl.ownerDocument;
         this.wrapperEl.replaceChildren();
-
-        const header = doc.createElement('div');
-        header.classList.add('obsidianr-outline-header');
-        header.textContent = 'Book contents';
-        this.wrapperEl.appendChild(header);
 
         if (!book) {
             const emptyState = doc.createElement('div');
@@ -123,6 +136,10 @@ export class OutlinePanelController {
         const container = view.containerEl;
         if (!container) {
             return null;
+        }
+        const content = container.querySelector<HTMLElement>('.view-content');
+        if (content) {
+            return content;
         }
         return container.querySelector('.nav-outline') ?? container.querySelector('.tree-container') ?? container;
     }

@@ -9,9 +9,9 @@ export interface PageBookmark {
 }
 
 const WRAPPER_CLASS = 'obsidianr-bookmarks-wrapper';
-const HEADER_CLASS = 'obsidianr-bookmarks-header';
 const LIST_CLASS = 'obsidianr-bookmarks-list';
 const ITEM_CLASS = 'obsidianr-bookmarks-item';
+const HOST_CLASS = 'obsidianr-bookmarks-host';
 const PREVIEW_LENGTH = 220;
 
 export class BookmarksPanelController {
@@ -37,6 +37,7 @@ export class BookmarksPanelController {
             return;
         }
         container.dataset.obsidianrBookmarksHost = 'true';
+        container.classList.add(HOST_CLASS);
         const wrapper = container.ownerDocument.createElement('div');
         wrapper.classList.add(WRAPPER_CLASS);
         container.insertBefore(wrapper, container.firstChild);
@@ -55,6 +56,7 @@ export class BookmarksPanelController {
             const host = this.resolveHostContainer(this.leaf);
             if (host) {
                 delete host.dataset.obsidianrBookmarksHost;
+                host.classList.remove(HOST_CLASS);
             }
         }
         this.leaf = null;
@@ -67,11 +69,6 @@ export class BookmarksPanelController {
         }
         const doc = this.wrapperEl.ownerDocument;
         this.wrapperEl.replaceChildren();
-
-        const header = doc.createElement('div');
-        header.classList.add(HEADER_CLASS);
-        header.textContent = 'Bookmarks';
-        this.wrapperEl.appendChild(header);
 
         if (!bookTitle) {
             const empty = doc.createElement('div');

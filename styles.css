@@ -181,6 +181,26 @@ body.obsidianr-zen .view-actions {
 	color: var(--text-normal);
 }
 
+body.obsidianr-reader .obsidianr-outline-leaf .view-header {
+	display: none !important;
+}
+
+body.obsidianr-reader .obsidianr-outline-leaf .nav-header {
+	display: none !important;
+}
+
+body.obsidianr-reader .obsidianr-outline-leaf .view-content {
+	display: flex;
+	flex-direction: column;
+	padding: 0;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+body.obsidianr-reader .obsidianr-outline-leaf .view-content > *:not(.obsidianr-outline-wrapper) {
+	display: none !important;
+}
+
 body.obsidianr-reader .obsidianr-bookmarks-leaf .view-header {
 	display: none !important;
 }
@@ -193,6 +213,8 @@ body.obsidianr-reader .obsidianr-bookmarks-leaf .view-content {
 	display: flex;
 	flex-direction: column;
 	padding: 0;
+	flex: 1 1 auto;
+	min-height: 0;
 }
 
 body.obsidianr-reader .obsidianr-bookmarks-leaf .view-content > *:not(.obsidianr-bookmarks-wrapper) {
@@ -203,19 +225,19 @@ body.obsidianr-reader .obsidianr-bookmarks-leaf .bookmarks-container {
 	display: flex;
 	flex-direction: column;
 	gap: 0;
+	flex: 1 1 auto;
+	min-height: 0;
 }
 
 body.obsidianr-reader .obsidianr-bookmarks-leaf .bookmarks-container > *:not(.obsidianr-bookmarks-wrapper) {
 	display: none !important;
 }
 
-.obsidianr-outline-header {
-	font-weight: 600;
-	font-size: 0.85em;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	margin-bottom: 8px;
-	color: var(--text-muted);
+body.obsidianr-reader .obsidianr-outline-host {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	height: 100%;
 }
 
 .obsidianr-outline-list {
@@ -224,6 +246,23 @@ body.obsidianr-reader .obsidianr-bookmarks-leaf .bookmarks-container > *:not(.ob
 	padding: 0;
 	display: grid;
 	gap: 8px;
+}
+
+body.obsidianr-reader .obsidianr-outline-wrapper {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-height: 0;
+	max-height: 100%;
+	overflow: hidden;
+}
+
+body.obsidianr-reader .obsidianr-outline-list {
+	flex: 1 1 auto;
+	min-height: 0;
+	max-height: 100%;
+	overflow-y: auto;
 }
 
 .obsidianr-outline-empty {
@@ -239,13 +278,21 @@ body.obsidianr-reader .obsidianr-bookmarks-leaf .bookmarks-container > *:not(.ob
 	background-color: var(--background-secondary);
 }
 
-.obsidianr-bookmarks-header {
-	font-weight: 600;
-	font-size: 0.85em;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	margin-bottom: 8px;
-	color: var(--text-muted);
+body.obsidianr-reader .obsidianr-bookmarks-host {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	height: 100%;
+}
+
+body.obsidianr-reader .obsidianr-bookmarks-wrapper {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-height: 0;
+	max-height: 100%;
+	overflow: hidden;
 }
 
 .obsidianr-bookmarks-list {
@@ -254,6 +301,13 @@ body.obsidianr-reader .obsidianr-bookmarks-leaf .bookmarks-container > *:not(.ob
 	padding: 0;
 	display: grid;
 	gap: 8px;
+}
+
+body.obsidianr-reader .obsidianr-bookmarks-list {
+	flex: 1 1 auto;
+	min-height: 0;
+	max-height: 100%;
+	overflow-y: auto;
 }
 
 .obsidianr-bookmarks-empty {
@@ -488,23 +542,4 @@ body.obsidianr-reader .obsidianr-bookmarks-leaf .bookmarks-container > *:not(.ob
 	font-size: 0.85em;
 	color: var(--text-muted);
 	text-align: center;
-}
-
-.obsidianr-stats-book-list {
-	list-style: none;
-	margin: 4px 0 0;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-
-.obsidianr-stats-book-title {
-	font-weight: 500;
-}
-
-.obsidianr-stats-book-duration {
-	float: right;
-	color: var(--text-muted);
-	font-size: 0.85em;
 }

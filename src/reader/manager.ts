@@ -185,12 +185,14 @@ export class ReaderManager {
         }
 
         const container = leaf?.view?.containerEl ?? null;
-        if (container?.classList.contains('obsidianr-bookmarks-leaf')) {
-            return;
-        }
+        if (container) {
+            if (container.classList.contains('obsidianr-bookmarks-leaf') || container.classList.contains('obsidianr-outline-leaf')) {
+                return;
+            }
 
-        if (container?.querySelector('[data-obsidianr-bookmarks-host="true"]')) {
-            return;
+            if (container.querySelector('[data-obsidianr-bookmarks-host="true"], [data-obsidianr-outline-host="true"]')) {
+                return;
+            }
         }
 
         const targetView = this.resolveMarkdownView(leaf);
@@ -213,6 +215,7 @@ export class ReaderManager {
             totalPages: 0,
             pageHeight: 0
         });
+        this.syncOverlayControls();
         this.schedulePagination(false);
     }
 
@@ -250,6 +253,11 @@ export class ReaderManager {
                 return;
             }
 
+            if (this.isBookChapter(this.state.snapshot.currentFile)) {
+                this.scheduleLeafResolutionAttempt();
+                return;
+            }
+
             this.leafResolutionAttempts += 1;
             if (this.leafResolutionAttempts < 6) {
                 this.scheduleLeafResolutionAttempt();
@@ -267,6 +275,17 @@ export class ReaderManager {
             this.pendingLeafResolution = null;
         }
         this.leafResolutionAttempts = 0;
+    }
+
+    private isBookChapter(file: TFile | null): boolean {
+        if (!file || !this.plugin.books) {
+            return false;
+        }
+        const { book } = this.plugin.books.getChapterNeighbors(file);
+        if (!book) {
+            return false;
+        }
+        return book.chapters.some((chapter) => chapter.file.path === file.path);
     }
 
     private getActiveMarkdownView(): MarkdownView | null {
@@ -1139,6 +1158,7 @@ export class ReaderManager {
 
             this.pagination.applyPage(clampedPage);
             this.updatePageIndicator();
+            this.syncOverlayControls();
         });
     }
 
