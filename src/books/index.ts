@@ -677,22 +677,132 @@ export class BookCatalog {
     }
 
     private extractChapterOrder(frontmatter: Frontmatter, file: TFile): number {
-        const keys = ['chapter', 'order', 'index', 'position', 'no', 'number'];
-        if (frontmatter) {
-            for (const key of keys) {
-                const value = frontmatter[key];
-                if (typeof value === 'number') {
-                    return value;
-                }
-                if (typeof value === 'string') {
-                    const parsed = Number(value);
-                    if (!Number.isNaN(parsed)) {
-                        return parsed;
-                    }
+        const fallback = this.computeFallbackOrder(file.path);
+
+        const volume = this.extractNumericField(frontmatter, ['volume', 'bookVolume', 'book', 'vol', 'volumeNumber', 'volume_no', 'volumeIndex'])
+            ?? this.extractNumberFromName(file.basename, [/\b(?:volume|book|livre|tome)\s*([0-9ivxlcdm]+)/i]);
+
+        const part = this.extractNumericField(frontmatter, ['part', 'partIndex', 'partNumber', 'part_no', 'bookPart', 'partOrder'])
+            ?? this.extractNumberFromName(file.basename, [/\b(?:part|partie)\s*([0-9ivxlcdm]+)/i]);
+
+        const chapter = this.extractNumericField(frontmatter, ['chapter', 'chapterIndex', 'order', 'index', 'position', 'no', 'number'])
+            ?? this.extractNumberFromName(file.basename, [/\b(?:chapter|chapitre|capitulo|capítulo)\s*([0-9ivxlcdm]+)/i]);
+
+        const subsection = this.extractNumericField(frontmatter, ['section', 'segment', 'subchapter', 'subChapter', 'scene', 'episode'])
+            ?? this.extractNumberFromName(file.basename, [/\b(?:section|segment|scene|episode)\s*([0-9ivxlcdm]+)/i]);
+
+        if (volume != null || part != null || chapter != null || subsection != null) {
+            return this.composeCompositeOrder([volume, part, chapter, subsection], fallback);
+        }
+
+        const simpleDigits = this.extractNumberFromName(file.basename, [/([0-9ivxlcdm]+)/i]);
+        if (simpleDigits != null) {
+            return this.composeCompositeOrder([null, null, simpleDigits, null], fallback);
+        }
+
+        return this.composeCompositeOrder([null, null, null, null], fallback);
+    }
+
+    private computeFallbackOrder(path: string): number {
+        const hash = Math.abs(this.hashString(path));
+        return hash % 1000;
+    }
+
+    private composeCompositeOrder(levels: Array<number | null>, fallback: number): number {
+        const BASE = 1000;
+        let result = 0;
+        for (const level of levels) {
+            const clamped = level != null && Number.isFinite(level) ? Math.max(0, Math.min(Math.floor(level), BASE - 1)) : 0;
+            result = result * BASE + clamped;
+        }
+        const normalizedFallback = Math.max(0, Math.min(fallback % BASE, BASE - 1));
+        return result * BASE + normalizedFallback;
+    }
+
+    private extractNumericField(frontmatter: Frontmatter, keys: string[]): number | null {
+        if (!frontmatter) {
+            return null;
+        }
+        for (const key of keys) {
+            if (Object.prototype.hasOwnProperty.call(frontmatter, key)) {
+                const parsed = this.parseNumberLike(frontmatter[key]);
+                if (parsed != null) {
+                    return parsed;
                 }
             }
         }
-        return Number.MAX_SAFE_INTEGER - Math.abs(this.hashString(file.path));
+        return null;
+    }
+
+    private extractNumberFromName(name: string, patterns: RegExp[]): number | null {
+        for (const pattern of patterns) {
+            const match = name.match(pattern);
+            if (!match) {
+                continue;
+            }
+            for (let index = match.length - 1; index >= 1; index -= 1) {
+                const parsed = this.parseNumberLike(match[index]);
+                if (parsed != null) {
+                    return parsed;
+                }
+            }
+        }
+        return null;
+    }
+
+    private parseNumberLike(value: unknown): number | null {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value;
+        }
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed) {
+                return null;
+            }
+            const direct = Number(trimmed);
+            if (!Number.isNaN(direct)) {
+                return direct;
+            }
+            const numericMatch = trimmed.match(/[-+]?\d+(?:\.\d+)?/);
+            if (numericMatch) {
+                const parsed = Number(numericMatch[0]);
+                if (!Number.isNaN(parsed)) {
+                    return parsed;
+                }
+            }
+            const romanMatch = trimmed.match(/\b[ivxlcdm]+\b/i);
+            if (romanMatch) {
+                const romanValue = this.parseRomanNumeral(romanMatch[0]);
+                if (romanValue != null) {
+                    return romanValue;
+                }
+            }
+        }
+        return null;
+    }
+
+    private parseRomanNumeral(value: string): number | null {
+        const digits = value.toLowerCase().replace(/[^ivxlcdm]/g, '');
+        if (!digits) {
+            return null;
+        }
+        const map: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
+        let total = 0;
+        let previous = 0;
+        for (let index = digits.length - 1; index >= 0; index -= 1) {
+            const char = digits[index];
+            const current = map[char];
+            if (!current) {
+                return null;
+            }
+            if (current < previous) {
+                total -= current;
+            } else {
+                total += current;
+                previous = current;
+            }
+        }
+        return total;
     }
 
     private extractChapterTitle(frontmatter: Frontmatter, file: TFile): string {
