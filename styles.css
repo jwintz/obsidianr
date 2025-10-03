@@ -699,6 +699,9 @@ body.obsidianr-reader .obsidianr-bookmarks-list {
 	align-items: flex-end;
 	gap: 8px;
 	height: 140px;
+	padding-top: 6px;
+	box-sizing: border-box;
+	overflow: hidden;
 }
 
 .obsidianr-stats-trend-column {
@@ -707,6 +710,8 @@ body.obsidianr-reader .obsidianr-bookmarks-list {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
+	height: 100%;
+	justify-content: flex-end;
 	gap: 6px;
 }
 
@@ -715,6 +720,11 @@ body.obsidianr-reader .obsidianr-bookmarks-list {
 	border-radius: 6px 6px 0 0;
 	background: linear-gradient(180deg, var(--interactive-accent) 0%, rgba(255, 255, 255, 0.15) 100%);
 	transition: height 0.18s ease;
+}
+
+.obsidianr-stats-trend-column-fill.is-placeholder {
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.08) 100%);
+	opacity: 0.65;
 }
 
 .obsidianr-stats-trend-column-label {
@@ -739,36 +749,132 @@ body.obsidianr-reader .obsidianr-bookmarks-list {
 	color: var(--text-normal);
 }
 
-.obsidianr-peak-chart {
+.obsidianr-peak-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(42px, 1fr));
-	gap: 10px;
-	align-items: end;
-	max-height: 160px;
+	grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
+	gap: 6px;
 }
 
-.obsidianr-peak-column {
+.obsidianr-peak-chip {
+	position: relative;
 	display: flex;
 	flex-direction: column;
+	gap: 4px;
+	padding: 6px 10px 10px;
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--background-secondary) 70%, transparent);
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 80%, transparent);
+	color: var(--text-muted);
+	--obsidianr-peak-intensity: 0.05;
+	transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.obsidianr-peak-chip::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	background: color-mix(in srgb, var(--interactive-accent) calc(var(--obsidianr-peak-intensity, 0) * 42%), transparent);
+	opacity: 0.18;
+	transition: opacity 0.16s ease;
+}
+
+.obsidianr-peak-chip:hover::before,
+.obsidianr-peak-chip:focus-visible::before {
+	opacity: 0.3;
+}
+
+.obsidianr-peak-chip:hover,
+.obsidianr-peak-chip:focus-visible {
+	box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+}
+
+.obsidianr-peak-chip > * {
+	position: relative;
+	z-index: 1;
+}
+
+.obsidianr-peak-chip-hour {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	font-weight: 600;
+	font-size: 0.82em;
+	color: var(--text-normal);
+}
+
+.obsidianr-peak-chip-hour-label {
+	flex: 1 1 auto;
+}
+
+.obsidianr-peak-chip-hour-meta {
+	display: flex;
 	align-items: center;
 	gap: 6px;
-	text-align: center;
 }
 
-.obsidianr-peak-column-fill {
-	width: 100%;
-	border-radius: 6px 6px 0 0;
-	background: linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.05) 100%);
-	transition: height 0.18s ease, background 0.18s ease;
+.obsidianr-peak-chip-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	color: color-mix(in srgb, var(--text-muted) 85%, transparent);
+	opacity: 0.75;
+	pointer-events: none;
 }
 
-.obsidianr-peak-column.is-top .obsidianr-peak-column-fill {
-	background: linear-gradient(180deg, var(--interactive-accent) 0%, rgba(255, 255, 255, 0.2) 100%);
+.obsidianr-peak-chip-icon svg {
+	width: 16px;
+	height: 16px;
+	stroke-width: 1.6;
 }
 
-.obsidianr-peak-column-label {
-	font-size: 0.7em;
+.obsidianr-peak-chip-badge {
+	font-size: 0.6em;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	padding: 2px 6px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.32);
+	color: var(--background-primary);
+}
+
+.obsidianr-peak-chip-meta {
+	font-size: 0.68em;
 	color: var(--text-muted);
+}
+
+.obsidianr-peak-chip-bar {
+	position: relative;
+	height: 3px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--background-modifier-border) 45%, transparent);
+}
+
+.obsidianr-peak-chip-bar::after {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	border-radius: inherit;
+	width: var(--obsidianr-peak-fill, 0%);
+	background: var(--interactive-accent);
+	opacity: 0.95;
+}
+
+.obsidianr-peak-chip.is-top {
+	color: var(--text-on-accent);
+	border-color: color-mix(in srgb, var(--interactive-accent) 65%, transparent);
+}
+
+.obsidianr-peak-chip.is-top::before {
+	opacity: 0.68;
+}
+
+.obsidianr-peak-chip.is-top .obsidianr-peak-chip-meta {
+	color: rgba(255, 255, 255, 0.9);
 }
 
 .obsidianr-stats-status {
@@ -814,11 +920,11 @@ body.obsidianr-reader .obsidianr-bookmarks-list {
 	color: var(--text-muted);
 }
 
-.obsidianr-peak-chart::-webkit-scrollbar {
+.obsidianr-peak-grid::-webkit-scrollbar {
 	height: 6px;
 }
 
-.obsidianr-peak-chart::-webkit-scrollbar-thumb {
+.obsidianr-peak-grid::-webkit-scrollbar-thumb {
 	background-color: rgba(255, 255, 255, 0.1);
 	border-radius: 999px;
 }
@@ -873,6 +979,11 @@ body.obsidianr-reader .obsidianr-bookmarks-list {
 
 .obsidianr-stats-alltime-summary-title {
 	flex: 1 1 auto;
+	font-size: 0.85em;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--text-muted);
+	font-weight: 600;
 }
 
 .obsidianr-stats-alltime-summary-total {
@@ -1077,16 +1188,18 @@ body.obsidianr-reader .obsidianr-bookmarks-list {
 		grid-template-columns: minmax(0, 1fr);
 	}
 	.obsidianr-stats-trend-chart {
-		height: 120px;
 		gap: 6px;
+		height: 120px;
 	}
-	.obsidianr-peak-chart {
-		display: flex;
-		gap: 12px;
+	.obsidianr-peak-grid {
+		display: grid;
+		grid-auto-flow: column;
+		grid-auto-columns: minmax(82px, 1fr);
 		overflow-x: auto;
 		padding-bottom: 8px;
+		gap: 6px;
 	}
-	.obsidianr-peak-column {
-		min-width: 44px;
+	.obsidianr-peak-chip {
+		min-width: 82px;
 	}
 }

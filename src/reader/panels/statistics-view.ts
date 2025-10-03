@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf } from 'obsidian';
+import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
 import type ObsidianRPlugin from '../../main';
 import type { ReaderPanelManager } from './manager';
 
@@ -56,7 +56,7 @@ export interface StatisticsDisplaySnapshot {
         weekly: { current: number; best: number; };
     };
     trend: {
-        points: Array<{ timestamp: number; duration: number; }>;
+        points: Array<{ timestamp: number; duration: number; hasData: boolean; }>;
         rollingAverageMs: number;
         lifetimeAverageMs: number;
     };
@@ -66,10 +66,21 @@ export interface StatisticsDisplaySnapshot {
     };
 }
 
+type TrendColumnPoint = {
+    timestamp: number;
+    duration: number;
+    placeholder: boolean;
+};
+
 export class ReaderStatisticsView extends ItemView {
     private snapshot: StatisticsDisplaySnapshot | null = null;
     private resizeObserver: ResizeObserver | null = null;
     private analysisMode: 'wide' | 'compact' | 'tight' = 'wide';
+    private renderQueued = false;
+    private contentWidth = 0;
+    private trendObserver: ResizeObserver | null = null;
+    private trendChartEl: HTMLElement | null = null;
+    private trendChartWidth = 0;
 
     constructor(
         leaf: WorkspaceLeaf,
@@ -104,6 +115,7 @@ export class ReaderStatisticsView extends ItemView {
         this.containerEl.removeClass('obsidianr-stats-view');
         this.contentEl.removeClass('obsidianr-stats-root');
         this.teardownResizeObserver();
+        this.detachTrendObserver();
     }
 
     setStatistics(snapshot: StatisticsDisplaySnapshot): void {
@@ -113,8 +125,9 @@ export class ReaderStatisticsView extends ItemView {
 
     private render(): void {
         const root = this.contentEl;
+        this.detachTrendObserver();
         root.empty?.();
-        this.applyAnalysisMode(root.clientWidth);
+        void this.applyAnalysisMode(root.clientWidth);
         if (!this.snapshot) {
             root.createEl('div', { text: 'Statistics will appear once you start reading.', cls: 'obsidianr-stats-empty' });
             return;
@@ -221,7 +234,7 @@ export class ReaderStatisticsView extends ItemView {
         const trend = this.snapshot?.trend;
         const card = root.createDiv({ cls: 'obsidianr-stats-card obsidianr-stats-card--trend' });
         card.createEl('h5', { text: 'Session trend' });
-        if (!trend || trend.points.length === 0) {
+        if (!trend) {
             card.createEl('p', { text: 'Trend data appears after a few reading sessions.', cls: 'obsidianr-stats-empty' });
             return;
         }
@@ -229,19 +242,41 @@ export class ReaderStatisticsView extends ItemView {
         const summary = card.createDiv({ cls: 'obsidianr-stats-trend-summary' });
         summary.createSpan({ text: `Rolling avg: ${this.formatDuration(trend.rollingAverageMs)}` });
         summary.createSpan({ text: `All-time avg: ${this.formatDuration(trend.lifetimeAverageMs)}` });
-
         const chart = card.createDiv({ cls: 'obsidianr-stats-trend-chart' });
-        const maxDuration = trend.points.reduce((max, entry) => Math.max(max, entry.duration), 0);
-        const points = trend.points.slice(-12);
-        for (const entry of points) {
-            const ratio = maxDuration > 0 ? entry.duration / maxDuration : 0;
-            const bar = chart.createDiv({ cls: 'obsidianr-stats-trend-column' });
-            const fill = bar.createDiv({ cls: 'obsidianr-stats-trend-column-fill' });
-            const heightRatio = ratio > 0 ? Math.max(0.08, ratio) : 0;
-            fill.style.height = `${heightRatio * 100}%`;
-            fill.setAttr('title', `${this.formatDuration(entry.duration)} • ${this.formatDate(entry.timestamp)}`);
-            fill.setAttr('data-duration', this.formatDuration(entry.duration));
-            bar.createSpan({ text: this.shortDate(entry.timestamp), cls: 'obsidianr-stats-trend-column-label' });
+        const columnCount = this.computeTrendColumnCount(chart, trend.points.length);
+        const decoratedPoints = this.ensureTrendPoints(trend, columnCount);
+        this.observeTrendChart(chart);
+        if (decoratedPoints.length === 0) {
+            card.createEl('p', { text: 'Trend data appears after a few reading sessions.', cls: 'obsidianr-stats-empty' });
+            return;
+        }
+        const chartHeight = chart.getBoundingClientRect().height || 140;
+        const paddingAllowance = 8;
+        const effectiveRange = Math.max(0, chartHeight - paddingAllowance);
+        const maxDuration = Math.max(
+            trend.rollingAverageMs,
+            trend.lifetimeAverageMs,
+            ...decoratedPoints.map((entry) => entry.duration),
+            1
+        );
+
+        for (const point of decoratedPoints) {
+            const column = chart.createDiv({ cls: 'obsidianr-stats-trend-column' });
+            const fill = column.createDiv({ cls: `obsidianr-stats-trend-column-fill${point.placeholder ? ' is-placeholder' : ''}` });
+            const ratio = maxDuration > 0 ? point.duration / maxDuration : 0;
+            const heightRatio = ratio > 0 ? Math.max(0.05, Math.min(ratio, 1)) : (point.placeholder ? 0.12 : 0);
+            const baseMin = point.placeholder ? 8 : 4;
+            const scaled = Math.round(heightRatio * effectiveRange);
+            const maxFillHeight = Math.max(baseMin, effectiveRange);
+            const heightPx = Math.min(maxFillHeight, Math.max(baseMin, scaled));
+            fill.style.height = `${heightPx}px`;
+            const tooltipSegments = [`${this.formatDuration(point.duration)}`];
+            if (point.placeholder) {
+                tooltipSegments.push('(estimated)');
+            }
+            tooltipSegments.push(this.formatDate(point.timestamp));
+            fill.setAttr('title', tooltipSegments.join(' • '));
+            column.createSpan({ text: this.shortDate(point.timestamp), cls: 'obsidianr-stats-trend-column-label' });
         }
     }
 
@@ -257,17 +292,37 @@ export class ReaderStatisticsView extends ItemView {
         const summary = card.createDiv({ cls: 'obsidianr-peak-summary' });
         summary.createSpan({ text: `${this.formatHour(peakHours.top.hour)} • ${this.formatPercent(peakHours.top.share)}` });
         summary.createSpan({ text: `${this.formatDuration(peakHours.top.totalMs)} read`, cls: 'obsidianr-peak-summary-duration' });
-
-        const chart = card.createDiv({ cls: 'obsidianr-peak-chart' });
+        const grid = card.createDiv({ cls: 'obsidianr-peak-grid' });
         const maxShare = peakHours.buckets.reduce((max, bucket) => Math.max(max, bucket.share), 0);
         for (const bucket of peakHours.buckets) {
-            const column = chart.createDiv({ cls: `obsidianr-peak-column${bucket.hour === peakHours.top.hour ? ' is-top' : ''}` });
-            const fill = column.createDiv({ cls: 'obsidianr-peak-column-fill' });
-            const ratio = maxShare > 0 ? bucket.share / maxShare : 0;
-            const heightRatio = ratio > 0 ? Math.max(0.04, ratio) : 0;
-            fill.style.height = `${heightRatio * 100}%`;
-            fill.setAttr('title', `${this.formatHour(bucket.hour)} • ${this.formatPercent(bucket.share)} • ${this.formatDuration(bucket.totalMs)}`);
-            column.createSpan({ text: this.formatHour(bucket.hour), cls: 'obsidianr-peak-column-label' });
+            const ratio = maxShare > 0 ? Math.max(0.05, bucket.share / maxShare) : 0;
+            const chip = grid.createDiv({ cls: `obsidianr-peak-chip${bucket.hour === peakHours.top.hour ? ' is-top' : ''}` });
+            chip.style.setProperty('--obsidianr-peak-intensity', ratio.toFixed(3));
+            chip.setAttr('title', `${this.formatHour(bucket.hour)} • ${this.formatPercent(bucket.share)} • ${this.formatDuration(bucket.totalMs)}`);
+
+            const header = chip.createDiv({ cls: 'obsidianr-peak-chip-hour' });
+            header.createSpan({ text: this.formatHour(bucket.hour), cls: 'obsidianr-peak-chip-hour-label' });
+            const headerMeta = header.createDiv({ cls: 'obsidianr-peak-chip-hour-meta' });
+            const isTop = bucket.hour === peakHours.top.hour;
+            if (!isTop) {
+                const iconName = this.clockIconForHour(bucket.hour);
+                if (iconName) {
+                    const icon = headerMeta.createSpan({ cls: 'obsidianr-peak-chip-icon' });
+                    setIcon(icon, iconName);
+                    icon.setAttr('aria-hidden', 'true');
+                }
+            }
+            if (isTop) {
+                headerMeta.createSpan({ text: 'Top', cls: 'obsidianr-peak-chip-badge' });
+            }
+
+            chip.createDiv({
+                text: `${this.formatPercent(bucket.share)} · ${this.formatDuration(bucket.totalMs)}`,
+                cls: 'obsidianr-peak-chip-meta'
+            });
+
+            const bar = chip.createDiv({ cls: 'obsidianr-peak-chip-bar' });
+            bar.style.setProperty('--obsidianr-peak-fill', `${Math.round(ratio * 100)}%`);
         }
     }
 
@@ -282,7 +337,7 @@ export class ReaderStatisticsView extends ItemView {
             details.setAttr('open', '');
         }
         const summary = details.createEl('summary', { cls: 'obsidianr-stats-alltime-summary' });
-        summary.createSpan({ text: 'Analysis', cls: 'obsidianr-stats-alltime-summary-title' });
+        summary.createSpan({ text: 'Analytics', cls: 'obsidianr-stats-alltime-summary-title' });
         summary.createSpan({ text: allTime.totalMs > 0 ? this.formatDuration(allTime.totalMs) : '—', cls: 'obsidianr-stats-alltime-summary-total' });
 
         const body = details.createDiv({ cls: 'obsidianr-stats-alltime-body' });
@@ -388,6 +443,106 @@ export class ReaderStatisticsView extends ItemView {
         return goalMs > 0 ? Math.max(percent, 0) : 0;
     }
 
+    private ensureTrendPoints(trend: StatisticsDisplaySnapshot['trend'], desiredCount: number): TrendColumnPoint[] {
+        if (trend.points.length === 0 || desiredCount <= 0) {
+            return [];
+        }
+        const count = Math.max(1, Math.min(desiredCount, trend.points.length));
+        const base = this.estimatePlaceholderDuration(trend);
+        return trend.points.slice(-count).map((point) => ({
+            timestamp: point.timestamp,
+            duration: point.hasData ? point.duration : base,
+            placeholder: !point.hasData
+        }));
+    }
+
+    private estimatePlaceholderDuration(trend: StatisticsDisplaySnapshot['trend']): number {
+        if (trend.rollingAverageMs > 0) {
+            return trend.rollingAverageMs;
+        }
+        if (trend.lifetimeAverageMs > 0) {
+            return trend.lifetimeAverageMs;
+        }
+        return 45 * 60 * 1000;
+    }
+
+    private computeTrendColumnCount(chart: HTMLElement, totalPoints: number): number {
+        const cappedPoints = Math.max(0, Math.min(totalPoints, 14));
+        if (cappedPoints === 0) {
+            return 0;
+        }
+        const rect = chart.getBoundingClientRect();
+        const width = rect.width;
+        if (width <= 0) {
+            if (!this.renderQueued) {
+                this.scheduleRender();
+            }
+            return this.fallbackTrendColumnCount(cappedPoints);
+        }
+        const minColumnWidth = 22; // approximate column width in px
+        const columnGap = 8;
+        const capacity = Math.floor((width + columnGap) / (minColumnWidth + columnGap));
+        const minRequired = Math.min(cappedPoints, totalPoints >= 3 ? 3 : totalPoints);
+        const desired = Math.max(1, capacity);
+        return Math.max(minRequired > 0 ? minRequired : 1, Math.min(cappedPoints, desired));
+    }
+
+    private fallbackTrendColumnCount(totalPoints: number): number {
+        const target = this.analysisMode === 'tight'
+            ? 3
+            : this.analysisMode === 'compact'
+                ? 7
+                : 14;
+        return Math.max(1, Math.min(totalPoints, target));
+    }
+
+    private observeTrendChart(chart: HTMLElement): void {
+        if (typeof ResizeObserver === 'undefined') {
+            return;
+        }
+        if (this.trendObserver) {
+            this.trendObserver.disconnect();
+            this.trendObserver = null;
+        }
+        this.trendChartEl = chart;
+        this.trendChartWidth = chart.getBoundingClientRect().width;
+        this.trendObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.target === this.trendChartEl) {
+                    const width = entry.contentRect.width;
+                    if (Math.abs(width - this.trendChartWidth) > 1) {
+                        this.trendChartWidth = width;
+                        this.scheduleRender();
+                    }
+                }
+            }
+        });
+        this.trendObserver.observe(chart);
+    }
+
+    private detachTrendObserver(): void {
+        if (this.trendObserver) {
+            this.trendObserver.disconnect();
+            this.trendObserver = null;
+        }
+        this.trendChartEl = null;
+        this.trendChartWidth = 0;
+    }
+
+    private scheduleRender(): void {
+        if (this.renderQueued || !this.containerEl.isConnected || typeof window === 'undefined') {
+            return;
+        }
+        this.renderQueued = true;
+        window.requestAnimationFrame(() => {
+            this.renderQueued = false;
+            if (!this.containerEl.isConnected) {
+                return;
+            }
+            this.render();
+        });
+    }
+
     private formatDuration(ms: number): string {
         if (ms <= 0) {
             return '0m';
@@ -403,6 +558,15 @@ export class ReaderStatisticsView extends ItemView {
             parts.push(`${minutes}m`);
         }
         return parts.join(' ');
+    }
+
+    private clockIconForHour(hour: number): string | null {
+        if (!Number.isFinite(hour)) {
+            return null;
+        }
+        const normalized = ((Math.round(hour) % 24) + 24) % 24;
+        const hour12 = normalized % 12 === 0 ? 12 : normalized % 12;
+        return `clock-${hour12}`;
     }
 
     private formatDate(timestamp: number | null): string {
@@ -481,11 +645,20 @@ export class ReaderStatisticsView extends ItemView {
         this.teardownResizeObserver();
         this.resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
-                this.applyAnalysisMode(entry.contentRect.width);
+                if (entry.target !== this.contentEl) {
+                    continue;
+                }
+                const width = entry.contentRect.width;
+                const modeChanged = this.applyAnalysisMode(width);
+                if (modeChanged || Math.abs(width - this.contentWidth) > 1) {
+                    this.contentWidth = width;
+                    this.scheduleRender();
+                }
             }
         });
         this.resizeObserver.observe(this.contentEl);
-        this.applyAnalysisMode(this.contentEl.clientWidth);
+        this.contentWidth = this.contentEl.clientWidth;
+        void this.applyAnalysisMode(this.contentWidth);
     }
 
     private teardownResizeObserver(): void {
@@ -495,10 +668,10 @@ export class ReaderStatisticsView extends ItemView {
         }
     }
 
-    private applyAnalysisMode(width: number): void {
+    private applyAnalysisMode(width: number): boolean {
         const root = this.contentEl;
         if (!root) {
-            return;
+            return false;
         }
         let nextMode: 'wide' | 'compact' | 'tight' = 'wide';
         if (width < 720) {
@@ -507,10 +680,11 @@ export class ReaderStatisticsView extends ItemView {
             nextMode = 'compact';
         }
         if (nextMode === this.analysisMode) {
-            return;
+            return false;
         }
         this.analysisMode = nextMode;
         root.toggleClass('is-analysis-compact', nextMode !== 'wide');
         root.toggleClass('is-analysis-tight', nextMode === 'tight');
+        return true;
     }
 }

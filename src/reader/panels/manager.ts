@@ -1,10 +1,10 @@
-import { EventRef, WorkspaceLeaf, TFile, debounce } from 'obsidian';
+import { EventRef, WorkspaceLeaf, TFile, TFolder, debounce } from 'obsidian';
 import type ObsidianRPlugin from '../../main';
 import type { ReaderState, ReaderSessionState } from '../../core/state';
 import type { BookInfo } from '../../books';
 import { OutlinePanelController } from './outline';
 import { BookmarksPanelController, type PageBookmark } from './bookmarks';
-import { ReadingStatisticsTracker, type SessionDurationRecord } from './statistics-tracker';
+import { ReadingStatisticsTracker, type SessionDurationRecord, type RawStatisticsSnapshot } from './statistics-tracker';
 import { ReaderStatisticsView, STATISTICS_VIEW_TYPE, type StatisticsDisplaySnapshot } from './statistics-view';
 import { BookmarkStore } from '../bookmarks';
 
@@ -325,7 +325,13 @@ export class ReaderPanelManager {
         books.sort((a, b) => b.totalMs - a.totalMs);
 
         const streaks = this.computeStreaks(raw.analytics.dailyTotals, raw.analytics.weeklyTotals, now);
-        const trend = this.computeSessionTrend(raw.analytics.sessionDurations, raw.analytics.totalSessionDuration, raw.analytics.totalSessionCount);
+        const trend = this.computeSessionTrend(
+            raw.analytics.sessionDurations,
+            raw.analytics.totalSessionDuration,
+            raw.analytics.totalSessionCount,
+            now,
+            raw.session
+        );
         const peakHours = this.computePeakHours(raw.analytics.peakHours);
 
         const allTimeBooks: Array<{
@@ -531,22 +537,45 @@ export class ReaderPanelManager {
     private computeSessionTrend(
         entries: SessionDurationRecord[],
         totalDuration: number,
-        totalCount: number
-    ): { points: SessionDurationRecord[]; rollingAverageMs: number; lifetimeAverageMs: number; } {
-        if (!entries.length) {
-            const lifetimeAverageMs = totalCount > 0 ? totalDuration / Math.max(1, totalCount) : 0;
-            return { points: [], rollingAverageMs: 0, lifetimeAverageMs };
+        totalCount: number,
+        now: number,
+        session: RawStatisticsSnapshot['session']
+    ): { points: Array<{ timestamp: number; duration: number; hasData: boolean; }>; rollingAverageMs: number; lifetimeAverageMs: number; } {
+        const lifetimeAverageMs = totalCount > 0 ? totalDuration / Math.max(1, totalCount) : 0;
+        const DAY_MS = 24 * 60 * 60 * 1000;
+        const todayStart = this.startOfDay(now);
+        const windowStart = todayStart - (13 * DAY_MS);
+
+        const dayTotals = new Map<number, number>();
+        for (const entry of entries) {
+            const dayKey = this.startOfDay(entry.timestamp);
+            dayTotals.set(dayKey, (dayTotals.get(dayKey) ?? 0) + entry.duration);
         }
 
-        const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
-        const window = sorted.slice(-5);
-        const rollingAverageMs = window.length > 0
-            ? window.reduce((sum, entry) => sum + entry.duration, 0) / window.length
+        if (session.active) {
+            const activeDay = this.startOfDay(session.start ?? now);
+            const existing = dayTotals.get(activeDay) ?? 0;
+            dayTotals.set(activeDay, existing + Math.max(0, session.durationMs));
+        }
+
+        const points: Array<{ timestamp: number; duration: number; hasData: boolean; }> = [];
+        const rollingWindow: number[] = [];
+        for (let offset = 0; offset < 14; offset += 1) {
+            const dayTimestamp = windowStart + offset * DAY_MS;
+            const totalMs = dayTotals.get(dayTimestamp) ?? 0;
+            const hasData = totalMs > 0;
+            if (hasData) {
+                rollingWindow.push(totalMs);
+            }
+            points.push({ timestamp: dayTimestamp, duration: totalMs, hasData });
+        }
+
+        const rollingAverageMs = rollingWindow.length > 0
+            ? rollingWindow.reduce((sum, value) => sum + value, 0) / rollingWindow.length
             : 0;
-        const lifetimeAverageMs = totalCount > 0 ? totalDuration / Math.max(1, totalCount) : 0;
 
         return {
-            points: sorted,
+            points,
             rollingAverageMs,
             lifetimeAverageMs
         };
@@ -684,7 +713,45 @@ export class ReaderPanelManager {
         if (book?.cover) {
             return this.plugin.app.vault.getResourcePath(book.cover);
         }
+        const folder = this.plugin.app.vault.getAbstractFileByPath(bookPath);
+        if (folder instanceof TFolder) {
+            const fallback = this.findFolderCover(folder);
+            if (fallback) {
+                return this.plugin.app.vault.getResourcePath(fallback);
+            }
+        }
         return null;
+    }
+
+    private findFolderCover(folder: TFolder): TFile | null {
+        const candidates: TFile[] = [];
+        const lowerFolderName = folder.name.toLowerCase();
+        for (const child of folder.children) {
+            if (!(child instanceof TFile)) {
+                continue;
+            }
+            if (!this.isImageFile(child)) {
+                continue;
+            }
+            candidates.push(child);
+        }
+        if (candidates.length === 0) {
+            return null;
+        }
+        const coverLike = candidates.find((file) => /cover/i.test(file.name));
+        if (coverLike) {
+            return coverLike;
+        }
+        const matchingName = candidates.find((file) => file.name.toLowerCase().startsWith(lowerFolderName));
+        if (matchingName) {
+            return matchingName;
+        }
+        return candidates[0];
+    }
+
+    private isImageFile(file: TFile): boolean {
+        const ext = file.extension.toLowerCase();
+        return ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'].includes(ext);
     }
 
     private resolveChapterTitle(chapterPath: string): string | null {
