@@ -108,12 +108,12 @@ export class OutlinePanelController {
 
             const title = doc.createElement('div');
             title.classList.add('obsidianr-card-title');
-            title.textContent = chapter.title;
+            title.textContent = chapter.file.basename;
             card.appendChild(title);
 
             const meta = doc.createElement('div');
             meta.classList.add('obsidianr-card-meta');
-            meta.textContent = chapter.file.basename;
+            meta.textContent = chapter.title;
             card.appendChild(meta);
 
             const preview = doc.createElement('div');

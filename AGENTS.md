@@ -4,6 +4,43 @@ This repository is meant to implement a reader mode as an Obsidian plugin, for e
 - Never ever write into ~/Library/Mobile\ Documents/iCloud\~md\~obsidian/Documents/Vault/ and subfolder
 - After each coding session, use the `apply` command to build and copy the plugin into the Vault for testing by the user
 
+# Current Progress
+
+- Reader mode overlay controls are in place with font-size adjustments, previous/next page navigation, font family selector, and zen toggle, including auto dismissal and bottom page indicator behaviour.
+- Zen mode successfully hides ribbons, side panels, status bar, tab bar, `view-header-left`, and `view-actions` on desktop and mobile builds.
+- Book detection promotes qualifying folders with native `BOOK` badges using metadata cache frontmatter parsing; no file writes occur.
+- Panels are integrated: Outline mirrors chapter context, Bookmarks lists per-book page markers, and the Statistics view aggregates session/daily/weekly/monthly/yearly data.
+- Statistics view highlights:
+    * Session trend keeps a 14-day history and adjusts bar count responsively to chart width (falling back to 7 or 3 bars when space is limited) while marking estimated values.
+    * Peak-hour chips use hour-specific `clock-1`…`clock-12` icons, suppress the icon when the "Top" badge is displayed, and scale intensity bars.
+    * Gauges, streaks, and all-time analytics cards render with responsive layouts and live data bindings.
+- Build + deploy workflow verified via `npm run build` and `npm run apply`, copying artifacts into the testing vault on macOS/iOS/iPadOS.
+
+## Implementation Plan · Pagination + Layout Fixes
+
+1. **Unify parameter propagation and live updates**
+    - Introduce a shared `ReaderLayoutContext` so `ReaderManager.applyParameters` and `PaginationEngine.prepareLayout` operate on the same computed values (margins, guards, indicator height) instead of duplicating logic.
+    - Ensure settings sliders broadcast incremental updates by wiring `refreshReaderModeIfActive` to wait for the next animation frame before re-running pagination, preventing stale padding from persisting.
+    - Expose an explicit `pagination.updateParameters()` hook so horizontal margins, spacing, and font metrics always reapply before measurement.
+
+2. **Fix multi-column pagination order**
+    - Rework `PaginationEngine.normalizeFragments` to derive column geometry from computed `column-width`/`column-gap`, quantize column origins with tolerance, and project fragments into a linear stream based on `(columnIndex * pageHeight) + intraColumnY`.
+    - Force measurement mode to use `column-fill: auto` during compute to avoid column balancing altering fragment order, then restore author settings after pagination.
+    - Add regression tests (or debug assertions) to guarantee offsets remain strictly increasing across column transitions.
+
+3. **Eliminate cropped content at page boundaries**
+    - Expand guard padding calculations to account for line-height and column gaps; ensure `collectFragments` includes first/last rendered nodes so offsets never slice a fragment mid-line.
+    - Clamp each computed offset to the previous fragment’s top and snap the final offset to `contentHeight - pageHeight` to avoid over-scroll.
+    - Add a verification pass that simulates scrolling to each offset and checks the visible range covers the targeted fragments without clipping.
+
+4. **Stabilize page transitions**
+    - Replace `currentOffset` math based solely on floats with a page model capturing `{ startOffset, endOffset }`, using these bounds when animating to avoid repeats or drops.
+    - Reset animations if offsets mutate mid-transition and debounce `applyPage` requests during recompute to keep navigation deterministic.
+
+5. **Instrumentation & QA**
+    - Introduce a temporary debug overlay (toggled via developer command) that renders the computed offsets, column maps, and guard zones for visual inspection while iterating.
+    - Craft scripted smoke flows (desktop + mobile emulation) covering: dynamic horizontal margins, 2–3 column layouts, rapid parameter tweaks, and forward/backward navigation to catch regressions before release.
+
 # Book detection in Vault
 
 - Detect books in the vault, they are transcribed using https://github.com/jwintz/obsidiant.
@@ -68,145 +105,214 @@ if (this.app.isMobile) {
 }
 ```
 
-## Layout and ergonomy
-
-- A bottom margin of the same height as `view-header-title-container` must contain the current page number over the total number of computed pages when overlay controls are displayed
-
-- When overlay controls are displayed the note title must change to the number of pages left in the chapter
-
-- next/previous buttons of overlay controls must consider pages instead of chapters
-
-- on mobile, sliding left/right must trigger page transitions, touch events must activate the overlay controls
-
-- Front matter must not be displayed in reader mode
-
-# Settings
-
-```
-class ObsidianRSettingTab extends PluginSettingTab {
-    plugin: ObsidianRPlugin;
-
-    constructor(app: App, plugin: ObsidianRPlugin) {
-        super(app, plugin);
-        this.plugin = plugin;
-    }
-
     display(): void {
         const { containerEl } = this;
-
         containerEl.empty();
+        containerEl.classList.add('obsidianr-settings');
 
-        // Format Section
         containerEl.createEl('h3', { text: 'Format' });
 
         new Setting(containerEl)
             .setName('Justified')
             .setDesc('Enable text justification by default in reader mode')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.justified)
-                .onChange(async (value) => {
-                    this.plugin.settings.justified = value;
-                    await this.plugin.saveSettings();
-                    this.plugin.refreshReaderModeIfActive();
-                }));
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.justified)
+                    .onChange(async (value) => {
+                        this.plugin.settings.justified = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
 
-        new Setting(containerEl)
+        const horizontalMargins = new Setting(containerEl)
             .setName('Horizontal Margins')
             .setDesc('Set the horizontal margins as a percentage of screen width')
-            .addSlider(slider => slider
-                .setLimits(0, 30, 1)
-                .setValue(this.plugin.settings.horizontalMargins)
-                .setDynamicTooltip()
-                .onChange(async (value) => {
-                    this.plugin.settings.horizontalMargins = value;
-                    await this.plugin.saveSettings();
-                    this.plugin.refreshReaderModeIfActive();
-                }));
+            .addSlider((slider) =>
+                slider
+                    .setLimits(0, 30, 1)
+                    .setValue(this.plugin.settings.horizontalMargins)
+                    .setDynamicTooltip()
+                    .onChange(async (value) => {
+                        this.plugin.settings.horizontalMargins = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+        horizontalMargins.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const columnsSetting = new Setting(containerEl)
             .setName('Columns')
             .setDesc('Number of text columns in reader mode')
-            .addSlider(slider => slider
-                .setLimits(1, 3, 1)
-                .setValue(this.plugin.settings.columns)
-                .setDynamicTooltip()
-                .onChange(async (value) => {
-                    this.plugin.settings.columns = value;
-                    await this.plugin.saveSettings();
-                    this.plugin.refreshReaderModeIfActive();
-                }));
+            .addSlider((slider) =>
+                slider
+                    .setLimits(1, 3, 1)
+                    .setValue(this.plugin.settings.columns)
+                    .setDynamicTooltip()
+                    .onChange(async (value) => {
+                        this.plugin.settings.columns = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+        columnsSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const lineSpacingSetting = new Setting(containerEl)
             .setName('Line Spacing')
             .setDesc('Adjust line spacing (1.0 = normal, 1.5 = 1.5x spacing)')
-            .addSlider(slider => slider
-                .setLimits(0.8, 2.5, 0.1)
-                .setValue(this.plugin.settings.lineSpacing)
-                .setDynamicTooltip()
-                .onChange(async (value) => {
-                    this.plugin.settings.lineSpacing = Math.round(value * 10) / 10;
-                    await this.plugin.saveSettings();
-                    this.plugin.refreshReaderModeIfActive();
-                }));
+            .addSlider((slider) =>
+                slider
+                    .setLimits(0.8, 2.5, 0.1)
+                    .setValue(this.plugin.settings.lineSpacing)
+                    .setDynamicTooltip()
+                    .onChange(async (value) => {
+                        this.plugin.settings.lineSpacing = Math.round(value * 10) / 10;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+        lineSpacingSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const charSpacingSetting = new Setting(containerEl)
             .setName('Character Spacing')
             .setDesc('Adjust spacing between characters (0 = normal)')
-            .addSlider(slider => slider
-                .setLimits(-0.1, 0.5, 0.01)
-                .setValue(this.plugin.settings.characterSpacing)
-                .setDynamicTooltip()
-                .onChange(async (value) => {
-                    this.plugin.settings.characterSpacing = Math.round(value * 100) / 100;
-                    await this.plugin.saveSettings();
-                    this.plugin.refreshReaderModeIfActive();
-                }));
+            .addSlider((slider) =>
+                slider
+                    .setLimits(-0.1, 0.5, 0.01)
+                    .setValue(this.plugin.settings.characterSpacing)
+                    .setDynamicTooltip()
+                    .onChange(async (value) => {
+                        this.plugin.settings.characterSpacing = Math.round(value * 100) / 100;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+        charSpacingSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const wordSpacingSetting = new Setting(containerEl)
             .setName('Word Spacing')
             .setDesc('Adjust spacing between words (0 = normal, small values recommended)')
-            .addSlider(slider => slider
-                .setLimits(0.0, 0.5, 0.01)
-                .setValue(this.plugin.settings.wordSpacing)
-                .setDynamicTooltip()
-                .onChange(async (value) => {
-                    this.plugin.settings.wordSpacing = Math.round(value * 100) / 100;
-                    await this.plugin.saveSettings();
-                    this.plugin.refreshReaderModeIfActive();
-                }));
+            .addSlider((slider) =>
+                slider
+                    .setLimits(0.0, 0.5, 0.01)
+                    .setValue(this.plugin.settings.wordSpacing)
+                    .setDynamicTooltip()
+                    .onChange(async (value) => {
+                        this.plugin.settings.wordSpacing = Math.round(value * 100) / 100;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+        wordSpacingSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const fontSizeSetting = new Setting(containerEl)
             .setName('Font Size')
             .setDesc('Default font size in pixels (can be adjusted in reader mode)')
-            .addSlider(slider => slider
-                .setLimits(8, 48, 1)
-                .setValue(this.plugin.settings.fontSize)
-                .setDynamicTooltip()
-                .onChange(async (value) => {
-                    this.plugin.settings.fontSize = value;
+            .addSlider((slider) =>
+                slider
+                    .setLimits(8, 48, 1)
+                    .setValue(this.plugin.settings.fontSize)
+                    .setDynamicTooltip()
+                    .onChange(async (value) => {
+                        this.plugin.settings.fontSize = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+        fontSizeSetting.controlEl.classList.add('obsidianr-settings-control');
+
+        const fontFamilySetting = new Setting(containerEl)
+            .setName('Font Family')
+            .setDesc('Default font family used in reader mode')
+            .addDropdown((dropdown) => {
+                for (const option of FONT_CHOICES) {
+                    dropdown.addOption(option.value, option.label);
+                }
+                const current = normalizeFontFamily(this.plugin.settings.fontFamily);
+                dropdown.setValue(current);
+                dropdown.onChange(async (value) => {
+                    this.plugin.settings.fontFamily = normalizeFontFamily(value);
                     await this.plugin.saveSettings();
                     this.plugin.refreshReaderModeIfActive();
-                }));
+                });
+            });
+        fontFamilySetting.controlEl.classList.add('obsidianr-settings-control');
 
-        // Transitions Section
         containerEl.createEl('h3', { text: 'Transitions' });
 
-        new Setting(containerEl)
+        const transitionSetting = new Setting(containerEl)
             .setName('Transition Type')
             .setDesc('Choose the page transition animation for reader mode')
-            .addDropdown(dropdown => dropdown
-                .addOption('none', 'None')
-                .addOption('page-curl', 'Page Curl')
-                .addOption('slide', 'Slide')
-                .addOption('fade', 'Fade')
-                .addOption('scroll', 'Scroll')
-                .setValue(this.plugin.settings.transitionType)
-                .onChange(async (value: 'none' | 'page-curl' | 'slide' | 'fade' | 'scroll') => {
-                    this.plugin.settings.transitionType = value;
-                    await this.plugin.saveSettings();
-                    this.plugin.refreshReaderModeIfActive();
-                }));
+            .addDropdown((dropdown) =>
+                dropdown
+                    .addOption('none', 'None')
+                    .addOption('page-curl', 'Page Curl')
+                    .addOption('slide', 'Slide')
+                    .addOption('fade', 'Fade')
+                    .addOption('scroll', 'Scroll')
+                    .setValue(this.plugin.settings.transitionType)
+                    .onChange(async (value) => {
+                        this.plugin.settings.transitionType = value as typeof this.plugin.settings.transitionType;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+        transitionSetting.controlEl.classList.add('obsidianr-settings-control');
 
+        containerEl.createEl('h3', { text: 'Goals' });
+
+        const goalSetting = new Setting(containerEl)
+            .setName('Daily reading goal (minutes)')
+            .setDesc('Used for daily statistics and streaks')
+            .addSlider((slider) =>
+                slider
+                    .setLimits(5, 240, 5)
+                    .setDynamicTooltip()
+                    .setValue(this.plugin.settings.dailyGoalMinutes)
+                    .onChange(async (value) => {
+                        this.plugin.settings.dailyGoalMinutes = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                    })
+            );
+        goalSetting.controlEl.classList.add('obsidianr-settings-control');
+
+        containerEl.createEl('h3', { text: 'Reset' });
+
+        const resetDefaultsSetting = new Setting(containerEl)
+            .setName('Reset to Defaults')
+            .setDesc('Reset all settings to their default values')
+            .addButton((button) =>
+                button
+                    .setButtonText('Reset All Settings')
+                    .setCta()
+                    .onClick(async () => {
+                        this.plugin.settings = Object.assign({}, DEFAULT_SETTINGS);
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshReaderModeIfActive();
+                        this.display();
+                        new Notice('All settings have been reset to defaults');
+                    })
+            );
+        resetDefaultsSetting.controlEl.classList.add('obsidianr-settings-control');
+
+        const resetDataSetting = new Setting(containerEl)
+            .setName('Reset Data')
+            .setDesc('Clear saved bookmarks, statistics, and reading positions')
+            .addButton((button) =>
+                button
+                    .setButtonText('Reset Data')
+                    .setWarning()
+                    .onClick(async () => {
+                        const modal = new ConfirmResetDataModal(this.app, async () => {
+                            await this.plugin.resetStoredData();
+                            this.display();
+                            new Notice('All reading data has been cleared');
+                        });
+                        modal.open();
+                    })
+            );
+        resetDataSetting.controlEl.classList.add('obsidianr-settings-control');
         // Reset Section
         containerEl.createEl('h3', { text: 'Reset' });
 
@@ -234,6 +340,8 @@ class ObsidianRSettingTab extends PluginSettingTab {
     }
 }
 ```
+
+The destructive "Reset Data" action opens `ConfirmResetDataModal`, mirroring the implementation in `src/settings/index.ts` to require explicit confirmation before clearing saved progress.
 
 Changing the settings dynamically updates everything.
 
