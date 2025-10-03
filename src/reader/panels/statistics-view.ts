@@ -31,10 +31,45 @@ export interface StatisticsDisplaySnapshot {
         goalMs: number;
         books: Array<{ title: string; totalMs: number; }>;
     };
+    allTime: {
+        totalMs: number;
+        books: Array<{
+            path: string;
+            title: string;
+            coverSrc: string | null;
+            totalMs: number;
+            sessionCount: number;
+            averageSessionMs: number;
+            lastRead: number | null;
+            firstRead: number | null;
+            share: number;
+            status: 'not-started' | 'in-progress' | 'completed';
+            chaptersVisited: number;
+            totalChapters: number;
+            completionPercent: number;
+            chaptersRemaining: number;
+            timeToCompleteMs: number | null;
+        }>;
+    };
+    streaks: {
+        daily: { current: number; best: number; };
+        weekly: { current: number; best: number; };
+    };
+    trend: {
+        points: Array<{ timestamp: number; duration: number; }>;
+        rollingAverageMs: number;
+        lifetimeAverageMs: number;
+    };
+    peakHours: {
+        buckets: Array<{ hour: number; totalMs: number; share: number; }>;
+        top: { hour: number; totalMs: number; share: number; } | null;
+    };
 }
 
 export class ReaderStatisticsView extends ItemView {
     private snapshot: StatisticsDisplaySnapshot | null = null;
+    private resizeObserver: ResizeObserver | null = null;
+    private analysisMode: 'wide' | 'compact' | 'tight' = 'wide';
 
     constructor(
         leaf: WorkspaceLeaf,
@@ -60,6 +95,7 @@ export class ReaderStatisticsView extends ItemView {
         this.containerEl.addClass('obsidianr-stats-view');
         this.contentEl.addClass('obsidianr-stats-root');
         this.panels.registerStatisticsView(this);
+        this.setupResizeObserver();
         this.render();
     }
 
@@ -67,6 +103,7 @@ export class ReaderStatisticsView extends ItemView {
         this.panels.unregisterStatisticsView(this);
         this.containerEl.removeClass('obsidianr-stats-view');
         this.contentEl.removeClass('obsidianr-stats-root');
+        this.teardownResizeObserver();
     }
 
     setStatistics(snapshot: StatisticsDisplaySnapshot): void {
@@ -77,14 +114,19 @@ export class ReaderStatisticsView extends ItemView {
     private render(): void {
         const root = this.contentEl;
         root.empty?.();
+        this.applyAnalysisMode(root.clientWidth);
         if (!this.snapshot) {
             root.createEl('div', { text: 'Statistics will appear once you start reading.', cls: 'obsidianr-stats-empty' });
             return;
         }
 
         this.renderSessionSection(root);
-        this.renderDailySection(root);
+        this.renderDailyCard(root);
         this.renderAggregates(root);
+        this.renderStreakCard(root);
+        this.renderTrendSection(root);
+        this.renderPeakHoursSection(root);
+        this.renderAllTimeSection(root);
     }
 
     private renderSessionSection(root: HTMLElement): void {
@@ -112,8 +154,9 @@ export class ReaderStatisticsView extends ItemView {
         }
     }
 
-    private renderDailySection(root: HTMLElement): void {
-        const card = root.createDiv({ cls: 'obsidianr-stats-card obsidianr-stats-card--gauge' });
+    private renderDailyCard(root: HTMLElement): void {
+        const container = root.createDiv({ cls: 'obsidianr-stats-grid obsidianr-stats-grid--single' });
+        const card = container.createDiv({ cls: 'obsidianr-stats-card obsidianr-stats-card--gauge obsidianr-stats-card--daily' });
         card.createEl('h5', { text: 'Daily goal' });
         const daily = this.snapshot?.daily;
         if (!daily) {
@@ -129,6 +172,28 @@ export class ReaderStatisticsView extends ItemView {
         } else {
             summary.textContent = `${this.formatDuration(daily.totalMs)} read — set a daily goal in settings.`;
         }
+    }
+
+    private renderStreakCard(root: HTMLElement): void {
+        const streaks = this.snapshot?.streaks;
+        const card = root.createDiv({ cls: 'obsidianr-stats-card obsidianr-stats-card--streaks' });
+        card.createEl('h5', { text: 'Streaks' });
+        if (!streaks) {
+            card.createEl('p', { text: 'No streaks yet — keep reading!', cls: 'obsidianr-stats-empty' });
+            return;
+        }
+        const list = card.createDiv({ cls: 'obsidianr-stats-streaks' });
+        this.renderStreakItem(list, 'Daily', streaks.daily.current, streaks.daily.best);
+        this.renderStreakItem(list, 'Weekly', streaks.weekly.current, streaks.weekly.best);
+    }
+
+    private renderStreakItem(container: HTMLElement, label: string, current: number, best: number): void {
+        const item = container.createDiv({ cls: 'obsidianr-stats-streak' });
+        const title = item.createDiv({ cls: 'obsidianr-stats-streak-label' });
+        title.textContent = label;
+        const values = item.createDiv({ cls: 'obsidianr-stats-streak-values' });
+        values.createSpan({ text: `${current}`, cls: 'obsidianr-stats-streak-current' });
+        values.createSpan({ text: `Best ${best}`, cls: 'obsidianr-stats-streak-best' });
     }
 
     private renderAggregates(root: HTMLElement): void {
@@ -150,6 +215,137 @@ export class ReaderStatisticsView extends ItemView {
         const yearlyPercent = this.createGaugeBlock(yearlyCard, 'This year', yearly.totalMs, yearly.goalMs);
         yearlyCard.createEl('p', { text: yearly.goalMs > 0 ? `${this.formatDuration(yearly.totalMs)} / ${this.formatDuration(yearly.goalMs)} (${Math.min(999, yearlyPercent)}%)` : `${this.formatDuration(yearly.totalMs)} read`, cls: 'obsidianr-gauge-summary' });
 
+    }
+
+    private renderTrendSection(root: HTMLElement): void {
+        const trend = this.snapshot?.trend;
+        const card = root.createDiv({ cls: 'obsidianr-stats-card obsidianr-stats-card--trend' });
+        card.createEl('h5', { text: 'Session trend' });
+        if (!trend || trend.points.length === 0) {
+            card.createEl('p', { text: 'Trend data appears after a few reading sessions.', cls: 'obsidianr-stats-empty' });
+            return;
+        }
+
+        const summary = card.createDiv({ cls: 'obsidianr-stats-trend-summary' });
+        summary.createSpan({ text: `Rolling avg: ${this.formatDuration(trend.rollingAverageMs)}` });
+        summary.createSpan({ text: `All-time avg: ${this.formatDuration(trend.lifetimeAverageMs)}` });
+
+        const chart = card.createDiv({ cls: 'obsidianr-stats-trend-chart' });
+        const maxDuration = trend.points.reduce((max, entry) => Math.max(max, entry.duration), 0);
+        const points = trend.points.slice(-12);
+        for (const entry of points) {
+            const ratio = maxDuration > 0 ? entry.duration / maxDuration : 0;
+            const bar = chart.createDiv({ cls: 'obsidianr-stats-trend-column' });
+            const fill = bar.createDiv({ cls: 'obsidianr-stats-trend-column-fill' });
+            const heightRatio = ratio > 0 ? Math.max(0.08, ratio) : 0;
+            fill.style.height = `${heightRatio * 100}%`;
+            fill.setAttr('title', `${this.formatDuration(entry.duration)} • ${this.formatDate(entry.timestamp)}`);
+            fill.setAttr('data-duration', this.formatDuration(entry.duration));
+            bar.createSpan({ text: this.shortDate(entry.timestamp), cls: 'obsidianr-stats-trend-column-label' });
+        }
+    }
+
+    private renderPeakHoursSection(root: HTMLElement): void {
+        const peakHours = this.snapshot?.peakHours;
+        const card = root.createDiv({ cls: 'obsidianr-stats-card obsidianr-stats-card--peak' });
+        card.createEl('h5', { text: 'Peak reading hours' });
+        if (!peakHours || !peakHours.buckets.length || !peakHours.top || peakHours.top.totalMs <= 0) {
+            card.createEl('p', { text: 'No hourly reading data yet.', cls: 'obsidianr-stats-empty' });
+            return;
+        }
+
+        const summary = card.createDiv({ cls: 'obsidianr-peak-summary' });
+        summary.createSpan({ text: `${this.formatHour(peakHours.top.hour)} • ${this.formatPercent(peakHours.top.share)}` });
+        summary.createSpan({ text: `${this.formatDuration(peakHours.top.totalMs)} read`, cls: 'obsidianr-peak-summary-duration' });
+
+        const chart = card.createDiv({ cls: 'obsidianr-peak-chart' });
+        const maxShare = peakHours.buckets.reduce((max, bucket) => Math.max(max, bucket.share), 0);
+        for (const bucket of peakHours.buckets) {
+            const column = chart.createDiv({ cls: `obsidianr-peak-column${bucket.hour === peakHours.top.hour ? ' is-top' : ''}` });
+            const fill = column.createDiv({ cls: 'obsidianr-peak-column-fill' });
+            const ratio = maxShare > 0 ? bucket.share / maxShare : 0;
+            const heightRatio = ratio > 0 ? Math.max(0.04, ratio) : 0;
+            fill.style.height = `${heightRatio * 100}%`;
+            fill.setAttr('title', `${this.formatHour(bucket.hour)} • ${this.formatPercent(bucket.share)} • ${this.formatDuration(bucket.totalMs)}`);
+            column.createSpan({ text: this.formatHour(bucket.hour), cls: 'obsidianr-peak-column-label' });
+        }
+    }
+
+    private renderAllTimeSection(root: HTMLElement): void {
+        const allTime = this.snapshot?.allTime;
+        if (!allTime) {
+            return;
+        }
+        const details = root.createEl('details', { cls: 'obsidianr-stats-card obsidianr-stats-alltime' });
+        details.dataset.collapsible = 'true';
+        if (allTime.books.length > 0) {
+            details.setAttr('open', '');
+        }
+        const summary = details.createEl('summary', { cls: 'obsidianr-stats-alltime-summary' });
+        summary.createSpan({ text: 'Analysis', cls: 'obsidianr-stats-alltime-summary-title' });
+        summary.createSpan({ text: allTime.totalMs > 0 ? this.formatDuration(allTime.totalMs) : '—', cls: 'obsidianr-stats-alltime-summary-total' });
+
+        const body = details.createDiv({ cls: 'obsidianr-stats-alltime-body' });
+        if (allTime.books.length === 0) {
+            body.createEl('p', { text: 'Start reading to build your long-term statistics.', cls: 'obsidianr-stats-empty' });
+            return;
+        }
+
+        const labels = ['Total time', 'Sessions', 'Avg session', 'Status', 'Progress', 'Time to complete', 'Last read', 'Library share'];
+
+        const header = body.createDiv({ cls: 'obsidianr-stats-alltime-header' });
+        header.createSpan({ text: 'Book', cls: 'obsidianr-stats-alltime-header-book' });
+        const headerMetrics = header.createDiv({ cls: 'obsidianr-stats-alltime-metrics is-header' });
+        for (const label of labels) {
+            const cell = headerMetrics.createDiv({ cls: 'obsidianr-stats-alltime-metric is-header' });
+            cell.createSpan({ text: label, cls: 'obsidianr-stats-alltime-metric-label' });
+        }
+
+        for (const book of allTime.books) {
+            const row = body.createDiv({ cls: 'obsidianr-stats-alltime-row' });
+            const bookCell = row.createDiv({ cls: 'obsidianr-stats-alltime-book' });
+            if (book.coverSrc) {
+                const cover = bookCell.createEl('img', { cls: 'obsidianr-stats-alltime-cover', attr: { alt: book.title } });
+                cover.src = book.coverSrc;
+            } else {
+                const placeholder = bookCell.createDiv({ cls: 'obsidianr-stats-alltime-cover is-placeholder' });
+                placeholder.createSpan({ text: book.title.slice(0, 1).toUpperCase(), cls: 'obsidianr-stats-alltime-cover-initial' });
+            }
+            const info = bookCell.createDiv({ cls: 'obsidianr-stats-alltime-info' });
+            info.createEl('span', { text: book.title, cls: 'obsidianr-stats-alltime-title' });
+            info.createEl('span', { text: this.basenameFromPath(book.path), cls: 'obsidianr-stats-alltime-path' });
+            const statusBadge = info.createSpan({ text: this.formatStatus(book.status), cls: `obsidianr-stats-status is-${book.status}` });
+            statusBadge.setAttr('aria-label', `Status ${this.formatStatus(book.status)}`);
+
+            const progressValue = book.totalChapters > 0
+                ? `${book.chaptersVisited}/${book.totalChapters} (${this.formatPercent(book.completionPercent)})`
+                : (book.chaptersVisited > 0 ? `${book.chaptersVisited} visited` : '—');
+            const completion = book.timeToCompleteMs != null ? this.formatDuration(book.timeToCompleteMs) : '—';
+
+            const metricsData = [
+                { label: 'Total time', value: this.formatDuration(book.totalMs) },
+                { label: 'Sessions', value: `${book.sessionCount}` },
+                { label: 'Avg session', value: this.formatDuration(book.averageSessionMs) },
+                { label: 'Status', value: this.formatStatus(book.status), className: `is-status-${book.status}` },
+                { label: 'Progress', value: progressValue },
+                { label: 'Time to complete', value: completion },
+                { label: 'Last read', value: this.formatDate(book.lastRead) },
+                { label: 'Library share', value: this.formatPercent(book.share) }
+            ];
+
+            const metrics = row.createDiv({ cls: 'obsidianr-stats-alltime-metrics' });
+            for (const metric of metricsData) {
+                const item = this.createMetricItem(metrics, metric.label, metric.value);
+                if (metric.className) {
+                    item.classList.add(metric.className);
+                }
+            }
+
+            const compact = row.createDiv({ cls: 'obsidianr-analysis-compact' });
+            for (const metric of metricsData) {
+                this.createCompactMetric(compact, metric.label, metric.value, metric.className);
+            }
+        }
     }
 
     private createGaugeBlock(container: HTMLElement, label: string, totalMs: number, goalMs: number): number {
@@ -207,5 +403,114 @@ export class ReaderStatisticsView extends ItemView {
             parts.push(`${minutes}m`);
         }
         return parts.join(' ');
+    }
+
+    private formatDate(timestamp: number | null): string {
+        if (!timestamp) {
+            return '—';
+        }
+        const date = new Date(timestamp);
+        return date.toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+        });
+    }
+
+    private formatPercent(value: number): string {
+        if (!isFinite(value) || value <= 0) {
+            return '0%';
+        }
+        const percent = Math.round(value * 1000) / 10;
+        return `${percent}%`;
+    }
+
+    private formatStatus(status: 'not-started' | 'in-progress' | 'completed'): string {
+        switch (status) {
+            case 'completed':
+                return 'Completed';
+            case 'in-progress':
+                return 'In progress';
+            case 'not-started':
+            default:
+                return 'Not started';
+        }
+    }
+
+    private shortDate(timestamp: number): string {
+        const date = new Date(timestamp);
+        return date.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric'
+        });
+    }
+
+    private formatHour(hour: number): string {
+        if (!Number.isFinite(hour)) {
+            return '—';
+        }
+        const normalized = Math.round(hour) % 24;
+        return `${normalized.toString().padStart(2, '0')}:00`;
+    }
+
+    private createMetricItem(container: HTMLElement, label: string, value: string): HTMLElement {
+        const item = container.createDiv({ cls: 'obsidianr-stats-alltime-metric' });
+        item.createSpan({ text: label, cls: 'obsidianr-stats-alltime-metric-label' });
+        item.createSpan({ text: value, cls: 'obsidianr-stats-alltime-metric-value' });
+        return item;
+    }
+
+    private createCompactMetric(container: HTMLElement, label: string, value: string, className?: string): void {
+        const item = container.createDiv({ cls: 'obsidianr-analysis-compact-item' });
+        item.createSpan({ text: label, cls: 'obsidianr-analysis-compact-label' });
+        const valueEl = item.createSpan({ text: value, cls: 'obsidianr-analysis-compact-value' });
+        if (className) {
+            valueEl.classList.add(className);
+        }
+    }
+
+    private basenameFromPath(path: string): string {
+        const parts = path.split('/');
+        return parts[parts.length - 1] ?? path;
+    }
+
+    private setupResizeObserver(): void {
+        if (typeof ResizeObserver === 'undefined') {
+            return;
+        }
+        this.teardownResizeObserver();
+        this.resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                this.applyAnalysisMode(entry.contentRect.width);
+            }
+        });
+        this.resizeObserver.observe(this.contentEl);
+        this.applyAnalysisMode(this.contentEl.clientWidth);
+    }
+
+    private teardownResizeObserver(): void {
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+            this.resizeObserver = null;
+        }
+    }
+
+    private applyAnalysisMode(width: number): void {
+        const root = this.contentEl;
+        if (!root) {
+            return;
+        }
+        let nextMode: 'wide' | 'compact' | 'tight' = 'wide';
+        if (width < 720) {
+            nextMode = 'tight';
+        } else if (width < 1100) {
+            nextMode = 'compact';
+        }
+        if (nextMode === this.analysisMode) {
+            return;
+        }
+        this.analysisMode = nextMode;
+        root.toggleClass('is-analysis-compact', nextMode !== 'wide');
+        root.toggleClass('is-analysis-tight', nextMode === 'tight');
     }
 }

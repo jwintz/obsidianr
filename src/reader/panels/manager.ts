@@ -4,9 +4,11 @@ import type { ReaderState, ReaderSessionState } from '../../core/state';
 import type { BookInfo } from '../../books';
 import { OutlinePanelController } from './outline';
 import { BookmarksPanelController, type PageBookmark } from './bookmarks';
-import { ReadingStatisticsTracker } from './statistics-tracker';
+import { ReadingStatisticsTracker, type SessionDurationRecord } from './statistics-tracker';
 import { ReaderStatisticsView, STATISTICS_VIEW_TYPE, type StatisticsDisplaySnapshot } from './statistics-view';
 import { BookmarkStore } from '../bookmarks';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface SessionContextPaths {
     bookPath: string | null;
@@ -322,6 +324,94 @@ export class ReaderPanelManager {
         }
         books.sort((a, b) => b.totalMs - a.totalMs);
 
+        const streaks = this.computeStreaks(raw.analytics.dailyTotals, raw.analytics.weeklyTotals, now);
+        const trend = this.computeSessionTrend(raw.analytics.sessionDurations, raw.analytics.totalSessionDuration, raw.analytics.totalSessionCount);
+        const peakHours = this.computePeakHours(raw.analytics.peakHours);
+
+        const allTimeBooks: Array<{
+            path: string;
+            title: string;
+            coverSrc: string | null;
+            totalMs: number;
+            sessionCount: number;
+            averageSessionMs: number;
+            lastRead: number | null;
+            firstRead: number | null;
+            share: number;
+            status: 'not-started' | 'in-progress' | 'completed';
+            chaptersVisited: number;
+            totalChapters: number;
+            completionPercent: number;
+            chaptersRemaining: number;
+            timeToCompleteMs: number | null;
+        }> = [];
+
+        let allTimeTotal = 0;
+        for (const [, aggregate] of raw.totals.bookTotals.entries()) {
+            allTimeTotal += aggregate.totalMs;
+        }
+
+        for (const [path, aggregate] of raw.totals.bookTotals.entries()) {
+            const totalMs = aggregate.totalMs;
+            const sessionCount = aggregate.sessionCount;
+            const averageSessionMs = sessionCount > 0 ? totalMs / sessionCount : 0;
+            const progress = raw.analytics.chapterProgress.get(path) ?? null;
+            const bookInfo = this.resolveBookByPath(path);
+            const totalChapters = bookInfo?.chapters.length ?? 0;
+            let chaptersVisited = 0;
+            let earliestVisit: number | null = null;
+            let latestVisit: number | null = null;
+            if (progress) {
+                for (const aggregateVisit of progress.values()) {
+                    if (aggregateVisit.lastSeen > 0) {
+                        chaptersVisited += 1;
+                        earliestVisit = earliestVisit == null ? aggregateVisit.firstSeen : Math.min(earliestVisit, aggregateVisit.firstSeen);
+                        latestVisit = latestVisit == null ? aggregateVisit.lastSeen : Math.max(latestVisit, aggregateVisit.lastSeen);
+                    }
+                }
+            }
+
+            let status: 'not-started' | 'in-progress' | 'completed';
+            if (totalChapters > 0) {
+                if (chaptersVisited === 0) {
+                    status = 'not-started';
+                } else if (chaptersVisited >= totalChapters) {
+                    status = 'completed';
+                } else {
+                    status = 'in-progress';
+                }
+            } else {
+                status = totalMs > 0 ? 'in-progress' : 'not-started';
+            }
+
+            const completionPercent = totalChapters > 0
+                ? Math.min(1, chaptersVisited / Math.max(1, totalChapters))
+                : (totalMs > 0 ? 1 : 0);
+            const chaptersRemaining = totalChapters > 0 ? Math.max(0, totalChapters - chaptersVisited) : 0;
+            const timeToCompleteMs = status === 'completed' && earliestVisit != null && latestVisit != null
+                ? Math.max(0, latestVisit - earliestVisit)
+                : null;
+
+            allTimeBooks.push({
+                path,
+                title: this.resolveBookTitle(path) ?? this.basenameFromPath(path),
+                coverSrc: this.resolveBookCover(path),
+                totalMs,
+                sessionCount,
+                averageSessionMs,
+                lastRead: aggregate.lastRead ?? null,
+                firstRead: aggregate.firstRead ?? null,
+                share: allTimeTotal > 0 ? totalMs / allTimeTotal : 0,
+                status,
+                chaptersVisited,
+                totalChapters,
+                completionPercent,
+                chaptersRemaining,
+                timeToCompleteMs
+            });
+        }
+        allTimeBooks.sort((a, b) => b.totalMs - a.totalMs);
+
         return {
             session: {
                 active: raw.session.active,
@@ -348,8 +438,209 @@ export class ReaderPanelManager {
                 totalMs: raw.totals.yearlyMs,
                 goalMs: goalMs * 365,
                 books
-            }
+            },
+            allTime: {
+                totalMs: allTimeTotal,
+                books: allTimeBooks
+            },
+            streaks,
+            trend,
+            peakHours
         };
+    }
+
+    private computeStreaks(
+        dailyTotals: Map<string, number>,
+        weeklyTotals: Map<string, number>,
+        now: number
+    ): { daily: { current: number; best: number; }; weekly: { current: number; best: number; }; } {
+        const dailyActive = new Set<number>();
+        for (const [dayKey, total] of dailyTotals.entries()) {
+            if (total > 0) {
+                const idx = this.dayIndexFromKey(dayKey);
+                if (idx != null) {
+                    dailyActive.add(idx);
+                }
+            }
+        }
+
+        const todayIndex = this.dayIndexFromTimestamp(now);
+        let currentDaily = 0;
+        let cursor = todayIndex;
+        while (dailyActive.has(cursor)) {
+            currentDaily += 1;
+            cursor -= 1;
+        }
+
+        let bestDaily = 0;
+        let prevDay = Number.NaN;
+        let run = 0;
+        const orderedDays = Array.from(dailyActive).sort((a, b) => a - b);
+        for (const index of orderedDays) {
+            if (!Number.isNaN(prevDay) && index === prevDay + 1) {
+                run += 1;
+            } else {
+                run = 1;
+            }
+            if (run > bestDaily) {
+                bestDaily = run;
+            }
+            prevDay = index;
+        }
+
+        const weeklyActive = new Set<number>();
+        for (const [weekKey, total] of weeklyTotals.entries()) {
+            if (total > 0) {
+                const idx = this.isoWeekIndexFromKey(weekKey);
+                if (idx != null) {
+                    weeklyActive.add(idx);
+                }
+            }
+        }
+
+        const currentWeekParts = this.isoWeekFromTimestamp(now);
+        let currentWeekly = 0;
+        let weekCursor = { ...currentWeekParts };
+        while (weeklyActive.has(this.isoWeekIndex(weekCursor.year, weekCursor.week))) {
+            currentWeekly += 1;
+            weekCursor = this.previousIsoWeek(weekCursor.year, weekCursor.week);
+        }
+
+        let bestWeekly = 0;
+        let prevIndex = Number.NaN;
+        run = 0;
+        const orderedWeeks = Array.from(weeklyActive).sort((a, b) => a - b);
+        for (const index of orderedWeeks) {
+            if (!Number.isNaN(prevIndex) && index === prevIndex + 1) {
+                run += 1;
+            } else {
+                run = 1;
+            }
+            if (run > bestWeekly) {
+                bestWeekly = run;
+            }
+            prevIndex = index;
+        }
+
+        return {
+            daily: { current: currentDaily, best: bestDaily },
+            weekly: { current: currentWeekly, best: bestWeekly }
+        };
+    }
+
+    private computeSessionTrend(
+        entries: SessionDurationRecord[],
+        totalDuration: number,
+        totalCount: number
+    ): { points: SessionDurationRecord[]; rollingAverageMs: number; lifetimeAverageMs: number; } {
+        if (!entries.length) {
+            const lifetimeAverageMs = totalCount > 0 ? totalDuration / Math.max(1, totalCount) : 0;
+            return { points: [], rollingAverageMs: 0, lifetimeAverageMs };
+        }
+
+        const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
+        const window = sorted.slice(-5);
+        const rollingAverageMs = window.length > 0
+            ? window.reduce((sum, entry) => sum + entry.duration, 0) / window.length
+            : 0;
+        const lifetimeAverageMs = totalCount > 0 ? totalDuration / Math.max(1, totalCount) : 0;
+
+        return {
+            points: sorted,
+            rollingAverageMs,
+            lifetimeAverageMs
+        };
+    }
+
+    private computePeakHours(buckets: number[]): {
+        buckets: Array<{ hour: number; totalMs: number; share: number; }>;
+        top: { hour: number; totalMs: number; share: number; } | null;
+    } {
+        if (!buckets.length) {
+            return { buckets: [], top: null };
+        }
+
+        const sanitized = buckets.map((value) => Math.max(0, value));
+        const total = sanitized.reduce((sum, value) => sum + value, 0);
+        const distribution = sanitized.map((value, hour) => ({
+            hour,
+            totalMs: value,
+            share: total > 0 ? value / total : 0
+        }));
+
+        if (total <= 0) {
+            return { buckets: distribution, top: null };
+        }
+
+        const top = distribution.reduce((best, current) => current.totalMs > best.totalMs ? current : best, distribution[0]!);
+        return { buckets: distribution, top: { ...top } };
+    }
+
+    private dayIndexFromTimestamp(timestamp: number): number {
+        return Math.floor(this.startOfDay(timestamp) / DAY_MS);
+    }
+
+    private dayIndexFromKey(key: string): number | null {
+        const [yearStr, monthStr, dayStr] = key.split('-');
+        if (!yearStr || !monthStr || !dayStr) {
+            return null;
+        }
+        const year = Number(yearStr);
+        const month = Number(monthStr);
+        const day = Number(dayStr);
+        if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+            return null;
+        }
+        const date = new Date(year, month - 1, day);
+        date.setHours(0, 0, 0, 0);
+        return Math.floor(date.getTime() / DAY_MS);
+    }
+
+    private startOfDay(timestamp: number): number {
+        const date = new Date(timestamp);
+        date.setHours(0, 0, 0, 0);
+        return date.getTime();
+    }
+
+    private isoWeekFromTimestamp(timestamp: number): { year: number; week: number; } {
+        const date = new Date(timestamp);
+        const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+        const dayNumber = (target.getUTCDay() + 6) % 7;
+        target.setUTCDate(target.getUTCDate() - dayNumber + 3);
+        const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+        const week = 1 + Math.round(((target.getTime() - firstThursday.getTime()) / DAY_MS - 3) / 7);
+        return { year: target.getUTCFullYear(), week };
+    }
+
+    private isoWeekIndex(year: number, week: number): number {
+        return year * 100 + week;
+    }
+
+    private isoWeekIndexFromKey(key: string): number | null {
+        const match = /^([0-9]{4})-W([0-9]{2})$/.exec(key);
+        if (!match) {
+            return null;
+        }
+        const year = Number(match[1]);
+        const week = Number(match[2]);
+        if (!Number.isFinite(year) || !Number.isFinite(week)) {
+            return null;
+        }
+        return this.isoWeekIndex(year, week);
+    }
+
+    private previousIsoWeek(year: number, week: number): { year: number; week: number; } {
+        if (week > 1) {
+            return { year, week: week - 1 };
+        }
+        const prevYear = year - 1;
+        const weeksInPrevYear = this.isoWeeksInYear(prevYear);
+        return { year: prevYear, week: weeksInPrevYear };
+    }
+
+    private isoWeeksInYear(year: number): number {
+        const dec28 = Date.UTC(year, 11, 28);
+        return this.isoWeekFromTimestamp(dec28).week;
     }
 
     private extractContext(snapshot: ReaderSessionState): SessionContextPaths {
@@ -371,28 +662,27 @@ export class ReaderPanelManager {
         return neighbors.book;
     }
 
-    private resolveBookTitle(bookPath: string): string | null {
+    private resolveBookByPath(bookPath: string): BookInfo | null {
         if (!this.plugin.books) {
             return null;
         }
         const books = this.plugin.books.getBooks();
         for (const book of books) {
             if (book.folder.path === bookPath) {
-                return book.title;
+                return book;
             }
         }
         return null;
     }
 
+    private resolveBookTitle(bookPath: string): string | null {
+        return this.resolveBookByPath(bookPath)?.title ?? null;
+    }
+
     private resolveBookCover(bookPath: string): string | null {
-        if (!this.plugin.books) {
-            return null;
-        }
-        const books = this.plugin.books.getBooks();
-        for (const book of books) {
-            if (book.folder.path === bookPath && book.cover) {
-                return this.plugin.app.vault.getResourcePath(book.cover);
-            }
+        const book = this.resolveBookByPath(bookPath);
+        if (book?.cover) {
+            return this.plugin.app.vault.getResourcePath(book.cover);
         }
         return null;
     }

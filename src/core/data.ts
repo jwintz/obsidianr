@@ -1,5 +1,12 @@
 import type { ObsidianRSettings } from '../settings';
-import type { TrackerPersistedState } from '../reader/panels/statistics-tracker';
+import type {
+    BookTotalsRecord,
+    ChapterProgressRecord,
+    DailyTotalRecord,
+    SessionDurationRecord,
+    TrackerPersistedState,
+    WeeklyTotalRecord
+} from '../reader/panels/statistics-tracker';
 
 export interface BookmarkEntry {
     bookPath: string;
@@ -16,14 +23,25 @@ export interface PersistedData {
     statistics: TrackerPersistedState;
 }
 
-export const DATA_VERSION = 1;
+export const DATA_VERSION = 2;
 
 export function normalizePersistedData(raw: unknown): PersistedData {
     const base: PersistedData = {
         version: DATA_VERSION,
         settings: {},
         bookmarks: [],
-        statistics: { history: [], activeSession: null }
+        statistics: {
+            history: [],
+            activeSession: null,
+            bookTotals: [],
+            chapterProgress: [],
+            hourBuckets: new Array(24).fill(0),
+            sessionDurations: [],
+            dailyTotals: [],
+            weeklyTotals: [],
+            totalSessionDuration: 0,
+            totalSessionCount: 0
+        }
     };
 
     if (!raw || typeof raw !== 'object') {
@@ -43,9 +61,26 @@ export function normalizePersistedData(raw: unknown): PersistedData {
         }
         if (source.statistics && typeof source.statistics === 'object') {
             const stats = source.statistics as TrackerPersistedState;
+            const bookTotals = Array.isArray(stats.bookTotals) ? stats.bookTotals.filter(isValidBookTotalsRecord) : [];
+            const chapterProgress = Array.isArray(stats.chapterProgress) ? stats.chapterProgress.filter(isValidChapterProgressRecord) : [];
+            const hourBuckets = isValidHourBuckets(stats.hourBuckets) ? [...stats.hourBuckets!] : new Array(24).fill(0);
+            const sessionDurations = Array.isArray(stats.sessionDurations) ? stats.sessionDurations.filter(isValidSessionDurationRecord).slice(-60) : [];
+            const dailyTotals = Array.isArray(stats.dailyTotals) ? stats.dailyTotals.filter(isValidDailyTotalRecord) : [];
+            const weeklyTotals = Array.isArray(stats.weeklyTotals) ? stats.weeklyTotals.filter(isValidWeeklyTotalRecord) : [];
+            const totalSessionDuration = typeof stats.totalSessionDuration === 'number' ? stats.totalSessionDuration : 0;
+            const totalSessionCount = typeof stats.totalSessionCount === 'number' ? stats.totalSessionCount : 0;
+
             base.statistics = {
                 history: Array.isArray(stats.history) ? stats.history.filter(isValidSessionRecord) : [],
-                activeSession: isValidActiveSession(stats.activeSession) ? stats.activeSession : null
+                activeSession: isValidActiveSession(stats.activeSession) ? stats.activeSession : null,
+                bookTotals,
+                chapterProgress,
+                hourBuckets,
+                sessionDurations,
+                dailyTotals,
+                weeklyTotals,
+                totalSessionDuration,
+                totalSessionCount
             };
         }
     } else {
@@ -107,4 +142,61 @@ function isValidActiveSession(active: unknown): TrackerPersistedState['activeSes
         bookPath: typeof bookPath === 'string' ? bookPath : null,
         chapterPath: typeof chapterPath === 'string' ? chapterPath : null
     };
+}
+
+function isValidBookTotalsRecord(record: unknown): record is BookTotalsRecord {
+    if (!record || typeof record !== 'object') {
+        return false;
+    }
+    const candidate = record as Record<string, unknown>;
+    return typeof candidate.path === 'string'
+        && typeof candidate.totalMs === 'number'
+        && typeof candidate.sessionCount === 'number'
+        && (candidate.lastRead == null || typeof candidate.lastRead === 'number')
+        && (candidate.firstRead == null || typeof candidate.firstRead === 'number');
+}
+
+function isValidChapterProgressRecord(record: unknown): record is ChapterProgressRecord {
+    if (!record || typeof record !== 'object') {
+        return false;
+    }
+    const candidate = record as Record<string, unknown>;
+    return typeof candidate.bookPath === 'string'
+        && typeof candidate.chapterPath === 'string'
+        && typeof candidate.firstSeen === 'number'
+        && typeof candidate.lastSeen === 'number';
+}
+
+function isValidSessionDurationRecord(record: unknown): record is SessionDurationRecord {
+    if (!record || typeof record !== 'object') {
+        return false;
+    }
+    const candidate = record as Record<string, unknown>;
+    return typeof candidate.timestamp === 'number'
+        && typeof candidate.duration === 'number';
+}
+
+function isValidDailyTotalRecord(record: unknown): record is DailyTotalRecord {
+    if (!record || typeof record !== 'object') {
+        return false;
+    }
+    const candidate = record as Record<string, unknown>;
+    return typeof candidate.day === 'string'
+        && typeof candidate.totalMs === 'number';
+}
+
+function isValidWeeklyTotalRecord(record: unknown): record is WeeklyTotalRecord {
+    if (!record || typeof record !== 'object') {
+        return false;
+    }
+    const candidate = record as Record<string, unknown>;
+    return typeof candidate.week === 'string'
+        && typeof candidate.totalMs === 'number';
+}
+
+function isValidHourBuckets(value: unknown): value is number[] {
+    if (!Array.isArray(value) || value.length !== 24) {
+        return false;
+    }
+    return value.every((item) => typeof item === 'number');
 }
