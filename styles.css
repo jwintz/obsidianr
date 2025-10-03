@@ -90,8 +90,8 @@ body.obsidianr-reader .obsidianr-overlay-group {
 }
 
 body.obsidianr-reader .obsidianr-overlay-button {
-	width: 36px;
-	height: 36px;
+	width: 34px;
+	height: 34px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -102,11 +102,16 @@ body.obsidianr-reader .obsidianr-overlay-button {
 	cursor: pointer;
 	transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
 	touch-action: manipulation;
+	appearance: none;
+	-webkit-appearance: none;
+	padding: 0;
 }
 
 body.obsidianr-reader .obsidianr-overlay-button svg {
-	width: 24px;
-	height: 24px;
+	width: 18px;
+	height: 18px;
+	display: block;
+	pointer-events: none;
 }
 
 body.obsidianr-reader .obsidianr-overlay-button:hover,
@@ -299,8 +304,9 @@ body.obsidianr-reader .obsidianr-bookmarks-wrapper {
 	list-style: none;
 	margin: 0;
 	padding: 0;
-	display: grid;
-	gap: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
 }
 
 body.obsidianr-reader .obsidianr-bookmarks-list {
@@ -310,10 +316,95 @@ body.obsidianr-reader .obsidianr-bookmarks-list {
 	overflow-y: auto;
 }
 
+.obsidianr-bookmarks-item {
+	margin: 0;
+}
+
+.obsidianr-bookmark-card {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 16px;
+}
+
+.obsidianr-bookmark-delete {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	width: 28px;
+	height: 28px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: 50%;
+	background-color: rgba(0, 0, 0, 0.25);
+	color: var(--text-muted);
+	padding: 0;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.obsidianr-bookmark-card:hover .obsidianr-bookmark-delete,
+.obsidianr-bookmark-card:focus-within .obsidianr-bookmark-delete {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.obsidianr-bookmark-delete:hover,
+.obsidianr-bookmark-delete:focus-visible {
+	background-color: rgba(0, 0, 0, 0.4);
+	color: var(--text-on-accent);
+}
+
+.obsidianr-bookmark-delete svg {
+	width: 16px;
+	height: 16px;
+	pointer-events: none;
+}
+
 .obsidianr-bookmarks-empty {
 	font-size: 0.85em;
 	color: var(--text-muted);
 }
+
+/* Settings */
+.obsidianr-settings {
+	--obsidianr-settings-control-width: 160px;
+}
+
+.obsidianr-settings .setting-item {
+	align-items: flex-start;
+}
+
+.obsidianr-settings .setting-item-control.obsidianr-settings-control {
+	flex: 1 1 var(--obsidianr-settings-control-width);
+	max-width: var(--obsidianr-settings-control-width);
+	width: 100%;
+	min-width: 0;
+}
+
+.obsidianr-settings .setting-item-control.obsidianr-settings-control > * {
+	width: 100%;
+}
+
+.obsidianr-settings .setting-item-control.obsidianr-settings-control .dropdown,
+.obsidianr-settings .setting-item-control.obsidianr-settings-control select {
+	width: 100%;
+}
+
+.obsidianr-settings .setting-item-control.obsidianr-settings-control button {
+	width: 100% !important;
+	display: inline-flex;
+	justify-content: center;
+}
+
+.obsidianr-settings .setting-item-control.obsidianr-settings-control .slider-container,
+.obsidianr-settings .setting-item-control.obsidianr-settings-control input[type="range"] {
+	width: 100%;
+}
+
 
 .obsidianr-card {
 	position: relative;

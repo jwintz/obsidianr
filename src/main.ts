@@ -116,6 +116,14 @@ export default class ObsidianRPlugin extends Plugin {
         return this.panels?.toggleBookmark(file, page) ?? false;
     }
 
+    async resetStoredData(): Promise<void> {
+        this.reader?.clearStoredReadingProgress();
+        this.bookmarkStore?.clear();
+        this.statisticsTracker?.reset();
+        this.panels?.refreshDataAfterReset();
+        this.requestSave();
+    }
+
     openChapter(target: TFile, page?: number | 'last'): Promise<void> {
         if (!target || !this.reader) {
             return Promise.resolve();

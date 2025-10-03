@@ -1,4 +1,4 @@
-import { MarkdownView, WorkspaceLeaf, Platform, MarkdownRenderer, TFile, setIcon } from 'obsidian';
+import { MarkdownView, WorkspaceLeaf, Platform, MarkdownRenderer, TFile, getIcon } from 'obsidian';
 import type ObsidianRPlugin from '../main';
 import { ReaderState, ReaderParameters } from '../core/state';
 import { PaginationEngine } from './pagination';
@@ -152,6 +152,13 @@ export class ReaderManager {
 
         this.teardownView();
         this.activeLeaf = null;
+    }
+
+    clearStoredReadingProgress(): void {
+        this.chapterPageCounts.clear();
+        this.chapterPageComputePromises.clear();
+        this.pendingInitialPage = null;
+        this.chapterNavigationLock = false;
     }
 
     refreshCurrentView(preservePosition = true): void {
@@ -369,6 +376,20 @@ export class ReaderManager {
         if (!this.pageIndicatorEl) {
             return;
         }
+        if (this.viewportEl) {
+            const desiredHeight = this.computePageIndicatorHeight(this.viewportEl);
+            if (Math.abs(desiredHeight - this.pageIndicatorHeight) > 0.5) {
+                this.pageIndicatorHeight = desiredHeight;
+                this.pageIndicatorEl.style.height = `${desiredHeight}px`;
+                if (this.contentEl) {
+                    this.contentEl.style.bottom = `${desiredHeight}px`;
+                }
+                this.viewportEl.dataset.obsidianrIndicatorHeight = `${desiredHeight}`;
+                const verticalPadding = Math.max(16, Math.round(this.state.snapshot.parameters.fontSize * 0.9));
+                this.viewportEl.style.paddingBottom = `${verticalPadding + desiredHeight}px`;
+                this.viewportEl.style.setProperty('--obsidianr-indicator-height', `${desiredHeight}px`);
+            }
+        }
         const snapshot = this.state.snapshot;
         const { current, total } = this.computeGlobalPageProgress(
             snapshot.currentFile,
@@ -499,7 +520,17 @@ export class ReaderManager {
         button.classList.add('obsidianr-overlay-button');
         button.setAttribute('aria-label', label);
         button.title = label;
-        setIcon(button, icon);
+        const iconNode = getIcon(icon);
+        if (iconNode) {
+            const svg = iconNode.cloneNode(true) as SVGSVGElement;
+            svg.setAttribute('width', '18');
+            svg.setAttribute('height', '18');
+            svg.setAttribute('aria-hidden', 'true');
+            svg.setAttribute('focusable', 'false');
+            button.appendChild(svg);
+        } else {
+            button.textContent = label.replace(/\s+.*/, '');
+        }
         button.addEventListener('pointerdown', (event) => {
             event.stopPropagation();
         });

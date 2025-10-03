@@ -45,6 +45,10 @@ export class BookmarkStore {
         this.entries.delete(this.makeKey(entry.bookPath, entry.chapterPath, entry.page));
     }
 
+    clear(): void {
+        this.entries.clear();
+    }
+
     serialize(): BookmarkEntry[] {
         return this.getEntries().map((entry) => ({ ...entry }));
     }

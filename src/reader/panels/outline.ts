@@ -13,11 +13,13 @@ export class OutlinePanelController {
     private leaf: WorkspaceLeaf | null = null;
     private previewTickets: Map<string, number> = new Map();
     private ticketCounter = 0;
+    private lastBook: BookInfo | null = null;
+    private lastActiveFile: TFile | null = null;
 
     constructor(private readonly plugin: ObsidianRPlugin) { }
 
     attach(leaf: WorkspaceLeaf): void {
-        if (this.leaf === leaf && this.wrapperEl) {
+        if (this.leaf === leaf && this.wrapperEl?.isConnected) {
             return;
         }
         this.detach();
@@ -26,16 +28,7 @@ export class OutlinePanelController {
         if (containerEl) {
             containerEl.classList.add(LEAF_CLASS);
         }
-        const container = this.resolveHostContainer(leaf);
-        if (!container) {
-            return;
-        }
-        container.dataset.obsidianrOutlineHost = 'true';
-        container.classList.add(HOST_CLASS);
-        const wrapper = container.ownerDocument.createElement('div');
-        wrapper.classList.add(WRAPPER_CLASS);
-        container.insertBefore(wrapper, container.firstChild);
-        this.wrapperEl = wrapper;
+        this.renderCurrentState();
     }
 
     detach(): void {
@@ -58,17 +51,42 @@ export class OutlinePanelController {
     }
 
     update(book: BookInfo | null, activeFile: TFile | null): void {
-        if (!this.wrapperEl) {
+        this.lastBook = book ?? null;
+        this.lastActiveFile = activeFile ?? null;
+        this.renderCurrentState();
+    }
+
+    sync(): void {
+        if (!this.leaf) {
             return;
         }
-        const doc = this.wrapperEl.ownerDocument;
-        this.wrapperEl.replaceChildren();
+        const previous = this.wrapperEl;
+        const wrapper = this.getOrCreateWrapper();
+        if (!wrapper) {
+            return;
+        }
+        if (wrapper !== previous || !wrapper.hasChildNodes()) {
+            this.renderCurrentState();
+        }
+    }
+
+    private renderCurrentState(): void {
+        const wrapper = this.getOrCreateWrapper();
+        if (!wrapper) {
+            return;
+        }
+
+        const doc = wrapper.ownerDocument;
+        wrapper.replaceChildren();
+
+        const book = this.lastBook;
+        const activeFile = this.lastActiveFile;
 
         if (!book) {
             const emptyState = doc.createElement('div');
             emptyState.classList.add('obsidianr-outline-empty');
             emptyState.textContent = 'Open a book chapter to view its table of contents.';
-            this.wrapperEl.appendChild(emptyState);
+            wrapper.appendChild(emptyState);
             return;
         }
 
@@ -128,7 +146,7 @@ export class OutlinePanelController {
             list.appendChild(item);
         }
 
-        this.wrapperEl.appendChild(list);
+        wrapper.appendChild(list);
     }
 
     private resolveHostContainer(leaf: WorkspaceLeaf): HTMLElement | null {
@@ -142,6 +160,38 @@ export class OutlinePanelController {
             return content;
         }
         return container.querySelector('.nav-outline') ?? container.querySelector('.tree-container') ?? container;
+    }
+
+    private getOrCreateWrapper(): HTMLElement | null {
+        if (!this.leaf) {
+            this.wrapperEl = null;
+            return null;
+        }
+        const containerEl = this.leaf.view?.containerEl;
+        if (containerEl && !containerEl.classList.contains(LEAF_CLASS)) {
+            containerEl.classList.add(LEAF_CLASS);
+        }
+        const container = this.resolveHostContainer(this.leaf);
+        if (!container) {
+            this.wrapperEl = null;
+            return null;
+        }
+        container.dataset.obsidianrOutlineHost = 'true';
+        container.classList.add(HOST_CLASS);
+
+        if (this.wrapperEl && (!this.wrapperEl.isConnected || this.wrapperEl.parentElement !== container)) {
+            this.wrapperEl.remove();
+            this.wrapperEl = null;
+        }
+
+        if (!this.wrapperEl) {
+            const wrapper = container.ownerDocument.createElement('div');
+            wrapper.classList.add(WRAPPER_CLASS);
+            container.insertBefore(wrapper, container.firstChild);
+            this.wrapperEl = wrapper;
+        }
+
+        return this.wrapperEl;
     }
 
     private loadPreview(file: TFile, target: HTMLElement): void {

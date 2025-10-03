@@ -1,4 +1,4 @@
-import { EventRef, Platform, WorkspaceLeaf, TFile, debounce } from 'obsidian';
+import { EventRef, WorkspaceLeaf, TFile, debounce } from 'obsidian';
 import type ObsidianRPlugin from '../../main';
 import type { ReaderState, ReaderSessionState } from '../../core/state';
 import type { BookInfo } from '../../books';
@@ -29,6 +29,7 @@ export class ReaderPanelManager {
 
     private stateChangedRef: EventRef | null = null;
     private interactionRef: EventRef | null = null;
+    private layoutChangeRef: EventRef | null = null;
 
     private active = false;
     private latestContext: SessionContextPaths = { bookPath: null, chapterPath: null };
@@ -107,6 +108,19 @@ export class ReaderPanelManager {
         return result.added;
     }
 
+    refreshDataAfterReset(): void {
+        if (!this.active) {
+            this.outlineController.update(null, null);
+            this.bookmarksController.update(null, []);
+            this.updateStatistics();
+            return;
+        }
+        const snapshot = this.state.snapshot;
+        this.updateOutline(snapshot);
+        this.updateBookmarks(snapshot);
+        this.updateStatistics();
+    }
+
     private handleStateChanged(snapshot: ReaderSessionState, prev: ReaderSessionState): void {
         this.latestContext = this.extractContext(snapshot);
 
@@ -145,14 +159,6 @@ export class ReaderPanelManager {
     }
 
     private async enablePanels(): Promise<void> {
-        if (Platform.isMobile) {
-            // Mobile panes are transient; skip forcing layout but keep stats tracking active.
-            this.updateOutline(this.state.snapshot);
-            this.updateBookmarks(this.state.snapshot);
-            this.refreshStatistics();
-            return;
-        }
-
         const outlineLeaf = await this.ensureBuiltinLeaf('outline');
         if (outlineLeaf) {
             this.outlineLeaf = outlineLeaf.leaf;
@@ -173,6 +179,13 @@ export class ReaderPanelManager {
             this.statisticsManaged = statisticsLeaf.managed;
         }
 
+        if (!this.layoutChangeRef) {
+            this.layoutChangeRef = this.plugin.app.workspace.on('layout-change', () => {
+                this.outlineController.sync();
+                this.bookmarksController.sync();
+            });
+        }
+
         this.updateOutline(this.state.snapshot);
         this.updateBookmarks(this.state.snapshot);
         this.updateStatistics();
@@ -182,16 +195,19 @@ export class ReaderPanelManager {
         this.outlineController.detach();
         this.bookmarksController.detach();
 
-        if (!Platform.isMobile) {
-            if (this.outlineManaged && this.outlineLeaf) {
-                this.outlineLeaf.detach();
-            }
-            if (this.bookmarksManaged && this.bookmarksLeaf) {
-                this.bookmarksLeaf.detach();
-            }
-            if (this.statisticsManaged && this.statisticsLeaf) {
-                this.statisticsLeaf.detach();
-            }
+        if (this.layoutChangeRef) {
+            this.plugin.app.workspace.offref(this.layoutChangeRef);
+            this.layoutChangeRef = null;
+        }
+
+        if (this.outlineManaged && this.outlineLeaf) {
+            this.outlineLeaf.detach();
+        }
+        if (this.bookmarksManaged && this.bookmarksLeaf) {
+            this.bookmarksLeaf.detach();
+        }
+        if (this.statisticsManaged && this.statisticsLeaf) {
+            this.statisticsLeaf.detach();
         }
 
         this.outlineLeaf = null;
@@ -208,7 +224,13 @@ export class ReaderPanelManager {
         if (existing.length > 0) {
             return { leaf: existing[0], managed: false };
         }
-        const leaf = this.plugin.app.workspace.getRightLeaf(true);
+        let leaf = this.plugin.app.workspace.getRightLeaf(false);
+        if (!leaf) {
+            leaf = this.plugin.app.workspace.getLeftLeaf(false);
+        }
+        if (!leaf) {
+            leaf = this.plugin.app.workspace.getRightLeaf(true) ?? this.plugin.app.workspace.getLeaf(true);
+        }
         if (!leaf) {
             return null;
         }
@@ -221,7 +243,13 @@ export class ReaderPanelManager {
         if (existing.length > 0) {
             return { leaf: existing[0], managed: false };
         }
-        const leaf = this.plugin.app.workspace.getLeftLeaf(true);
+        let leaf = this.plugin.app.workspace.getLeftLeaf(false);
+        if (!leaf) {
+            leaf = this.plugin.app.workspace.getRightLeaf(false);
+        }
+        if (!leaf) {
+            leaf = this.plugin.app.workspace.getLeftLeaf(true) ?? this.plugin.app.workspace.getLeaf(true);
+        }
         if (!leaf) {
             return null;
         }

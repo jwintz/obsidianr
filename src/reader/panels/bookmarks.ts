@@ -1,6 +1,6 @@
-import type { WorkspaceLeaf } from 'obsidian';
+import { Menu, Platform, setIcon } from 'obsidian';
+import type { WorkspaceLeaf, TFile } from 'obsidian';
 import type ObsidianRPlugin from '../../main';
-import type { TFile } from 'obsidian';
 
 export interface PageBookmark {
     chapter: TFile;
@@ -12,6 +12,7 @@ const WRAPPER_CLASS = 'obsidianr-bookmarks-wrapper';
 const LIST_CLASS = 'obsidianr-bookmarks-list';
 const ITEM_CLASS = 'obsidianr-bookmarks-item';
 const HOST_CLASS = 'obsidianr-bookmarks-host';
+const DELETE_BUTTON_CLASS = 'obsidianr-bookmark-delete';
 const PREVIEW_LENGTH = 220;
 
 export class BookmarksPanelController {
@@ -19,11 +20,13 @@ export class BookmarksPanelController {
     private leaf: WorkspaceLeaf | null = null;
     private previewTickets: Map<string, number> = new Map();
     private ticketCounter = 0;
+    private lastTitle: string | null = null;
+    private lastBookmarks: PageBookmark[] = [];
 
     constructor(private readonly plugin: ObsidianRPlugin) { }
 
     attach(leaf: WorkspaceLeaf): void {
-        if (this.leaf === leaf && this.wrapperEl) {
+        if (this.leaf === leaf && this.wrapperEl?.isConnected) {
             return;
         }
         this.detach();
@@ -32,16 +35,7 @@ export class BookmarksPanelController {
         if (containerEl) {
             containerEl.classList.add('obsidianr-bookmarks-leaf');
         }
-        const container = this.resolveHostContainer(leaf);
-        if (!container) {
-            return;
-        }
-        container.dataset.obsidianrBookmarksHost = 'true';
-        container.classList.add(HOST_CLASS);
-        const wrapper = container.ownerDocument.createElement('div');
-        wrapper.classList.add(WRAPPER_CLASS);
-        container.insertBefore(wrapper, container.firstChild);
-        this.wrapperEl = wrapper;
+        this.renderCurrentState();
     }
 
     detach(): void {
@@ -64,17 +58,46 @@ export class BookmarksPanelController {
     }
 
     update(bookTitle: string | null, bookmarks: PageBookmark[]): void {
-        if (!this.wrapperEl) {
+        this.lastTitle = bookTitle ?? null;
+        this.lastBookmarks = bookmarks.map((bookmark) => ({
+            chapter: bookmark.chapter,
+            page: bookmark.page,
+            note: bookmark.note
+        }));
+        this.renderCurrentState();
+    }
+
+    sync(): void {
+        if (!this.leaf) {
             return;
         }
-        const doc = this.wrapperEl.ownerDocument;
-        this.wrapperEl.replaceChildren();
+        const previous = this.wrapperEl;
+        const wrapper = this.getOrCreateWrapper();
+        if (!wrapper) {
+            return;
+        }
+        if (wrapper !== previous || !wrapper.hasChildNodes()) {
+            this.renderCurrentState();
+        }
+    }
+
+    private renderCurrentState(): void {
+        const wrapper = this.getOrCreateWrapper();
+        if (!wrapper) {
+            return;
+        }
+
+        const doc = wrapper.ownerDocument;
+        wrapper.replaceChildren();
+
+        const bookTitle = this.lastTitle;
+        const bookmarks = this.lastBookmarks;
 
         if (!bookTitle) {
             const empty = doc.createElement('div');
             empty.classList.add('obsidianr-bookmarks-empty');
             empty.textContent = 'Open a book to view its bookmarks.';
-            this.wrapperEl.appendChild(empty);
+            wrapper.appendChild(empty);
             return;
         }
 
@@ -82,7 +105,7 @@ export class BookmarksPanelController {
             const empty = doc.createElement('div');
             empty.classList.add('obsidianr-bookmarks-empty');
             empty.textContent = 'No bookmarks yet for this book.';
-            this.wrapperEl.appendChild(empty);
+            wrapper.appendChild(empty);
             return;
         }
 
@@ -122,6 +145,81 @@ export class BookmarksPanelController {
                 void this.plugin.openChapter(bookmark.chapter, bookmark.page);
             };
 
+            const deleteButton = doc.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.classList.add(DELETE_BUTTON_CLASS);
+            deleteButton.setAttribute('aria-label', 'Delete bookmark');
+            setIcon(deleteButton, 'trash-2');
+            deleteButton.addEventListener('pointerdown', (event) => {
+                event.stopPropagation();
+            });
+            deleteButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.deleteBookmark(bookmark);
+            });
+            card.appendChild(deleteButton);
+
+            let longPressTimer: number | null = null;
+            let longPressTriggered = false;
+            let touchStartX = 0;
+            let touchStartY = 0;
+
+            const clearLongPress = () => {
+                if (longPressTimer !== null) {
+                    window.clearTimeout(longPressTimer);
+                    longPressTimer = null;
+                }
+            };
+
+            card.addEventListener('touchstart', (event) => {
+                if (event.touches.length !== 1) {
+                    return;
+                }
+                const touch = event.touches[0];
+                touchStartX = touch.clientX;
+                touchStartY = touch.clientY;
+                longPressTriggered = false;
+                clearLongPress();
+                longPressTimer = window.setTimeout(() => {
+                    longPressTimer = null;
+                    longPressTriggered = true;
+                    this.showDeleteMenu(touchStartX, touchStartY, bookmark);
+                }, 550);
+            }, { passive: true });
+
+            card.addEventListener('touchmove', (event) => {
+                if (longPressTimer === null) {
+                    return;
+                }
+                const touch = event.touches[0];
+                if (!touch) {
+                    clearLongPress();
+                    return;
+                }
+                const dx = Math.abs(touch.clientX - touchStartX);
+                const dy = Math.abs(touch.clientY - touchStartY);
+                if (dx > 12 || dy > 12) {
+                    clearLongPress();
+                }
+            }, { passive: true });
+
+            const preventAfterLongPress = (event: TouchEvent) => {
+                if (longPressTimer !== null) {
+                    clearLongPress();
+                }
+                if (longPressTriggered) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    longPressTriggered = false;
+                }
+            };
+            card.addEventListener('touchend', preventAfterLongPress);
+            card.addEventListener('touchcancel', () => {
+                clearLongPress();
+                longPressTriggered = false;
+            });
+
             card.addEventListener('pointerdown', (event) => {
                 event.stopPropagation();
             });
@@ -142,7 +240,7 @@ export class BookmarksPanelController {
             list.appendChild(item);
         }
 
-        this.wrapperEl.appendChild(list);
+        wrapper.appendChild(list);
     }
 
     private resolveHostContainer(leaf: WorkspaceLeaf): HTMLElement | null {
@@ -156,6 +254,38 @@ export class BookmarksPanelController {
             return content;
         }
         return container;
+    }
+
+    private getOrCreateWrapper(): HTMLElement | null {
+        if (!this.leaf) {
+            this.wrapperEl = null;
+            return null;
+        }
+        const containerEl = this.leaf.view?.containerEl;
+        if (containerEl && !containerEl.classList.contains('obsidianr-bookmarks-leaf')) {
+            containerEl.classList.add('obsidianr-bookmarks-leaf');
+        }
+        const container = this.resolveHostContainer(this.leaf);
+        if (!container) {
+            this.wrapperEl = null;
+            return null;
+        }
+        container.dataset.obsidianrBookmarksHost = 'true';
+        container.classList.add(HOST_CLASS);
+
+        if (this.wrapperEl && (!this.wrapperEl.isConnected || this.wrapperEl.parentElement !== container)) {
+            this.wrapperEl.remove();
+            this.wrapperEl = null;
+        }
+
+        if (!this.wrapperEl) {
+            const wrapper = container.ownerDocument.createElement('div');
+            wrapper.classList.add(WRAPPER_CLASS);
+            container.insertBefore(wrapper, container.firstChild);
+            this.wrapperEl = wrapper;
+        }
+
+        return this.wrapperEl;
     }
 
     private loadPreview(file: TFile, target: HTMLElement): void {
@@ -280,5 +410,26 @@ export class BookmarksPanelController {
     private hasEnoughContent(text: string): boolean {
         const words = text.split(/\s+/).filter(Boolean);
         return text.length >= 60 || words.length >= 8;
+    }
+
+    private deleteBookmark(bookmark: PageBookmark): void {
+        this.plugin.state?.markInteraction?.();
+        void this.plugin.toggleBookmarkFor(bookmark.chapter, bookmark.page);
+    }
+
+    private showDeleteMenu(x: number, y: number, bookmark: PageBookmark): void {
+        if (!Platform.isMobile) {
+            this.deleteBookmark(bookmark);
+            return;
+        }
+        const menu = new Menu();
+        menu.addItem((item) => {
+            item.setTitle('Delete bookmark');
+            item.setIcon('trash-2');
+            item.onClick(() => {
+                this.deleteBookmark(bookmark);
+            });
+        });
+        menu.showAtPosition({ x, y });
     }
 }

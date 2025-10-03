@@ -123,6 +123,11 @@ export class ReadingStatisticsTracker {
         };
     }
 
+    reset(): void {
+        this.activeSession = null;
+        this.history = [];
+    }
+
     getSnapshot(now: number): RawStatisticsSnapshot {
         this.pruneHistory(now - 366 * DAY_MS);
 

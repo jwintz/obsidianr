@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, Modal } from 'obsidian';
 import type ObsidianRPlugin from '../main';
 import { DEFAULT_FONT_FAMILY, FONT_CHOICES, normalizeFontFamily } from '../core/fonts';
 
@@ -39,6 +39,7 @@ export class ObsidianRSettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
+        containerEl.classList.add('obsidianr-settings');
 
         containerEl.createEl('h3', { text: 'Format' });
 
@@ -55,7 +56,7 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                     })
             );
 
-        new Setting(containerEl)
+        const horizontalMargins = new Setting(containerEl)
             .setName('Horizontal Margins')
             .setDesc('Set the horizontal margins as a percentage of screen width')
             .addSlider((slider) =>
@@ -69,8 +70,9 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                     })
             );
+        horizontalMargins.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const columnsSetting = new Setting(containerEl)
             .setName('Columns')
             .setDesc('Number of text columns in reader mode')
             .addSlider((slider) =>
@@ -84,8 +86,9 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                     })
             );
+        columnsSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const lineSpacingSetting = new Setting(containerEl)
             .setName('Line Spacing')
             .setDesc('Adjust line spacing (1.0 = normal, 1.5 = 1.5x spacing)')
             .addSlider((slider) =>
@@ -99,8 +102,9 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                     })
             );
+        lineSpacingSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const charSpacingSetting = new Setting(containerEl)
             .setName('Character Spacing')
             .setDesc('Adjust spacing between characters (0 = normal)')
             .addSlider((slider) =>
@@ -114,8 +118,9 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                     })
             );
+        charSpacingSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const wordSpacingSetting = new Setting(containerEl)
             .setName('Word Spacing')
             .setDesc('Adjust spacing between words (0 = normal, small values recommended)')
             .addSlider((slider) =>
@@ -129,8 +134,9 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                     })
             );
+        wordSpacingSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const fontSizeSetting = new Setting(containerEl)
             .setName('Font Size')
             .setDesc('Default font size in pixels (can be adjusted in reader mode)')
             .addSlider((slider) =>
@@ -144,8 +150,9 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                     })
             );
+        fontSizeSetting.controlEl.classList.add('obsidianr-settings-control');
 
-        new Setting(containerEl)
+        const fontFamilySetting = new Setting(containerEl)
             .setName('Font Family')
             .setDesc('Default font family used in reader mode')
             .addDropdown((dropdown) => {
@@ -160,10 +167,11 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                     this.plugin.refreshReaderModeIfActive();
                 });
             });
+        fontFamilySetting.controlEl.classList.add('obsidianr-settings-control');
 
         containerEl.createEl('h3', { text: 'Transitions' });
 
-        new Setting(containerEl)
+        const transitionSetting = new Setting(containerEl)
             .setName('Transition Type')
             .setDesc('Choose the page transition animation for reader mode')
             .addDropdown((dropdown) =>
@@ -180,10 +188,11 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                     })
             );
+        transitionSetting.controlEl.classList.add('obsidianr-settings-control');
 
         containerEl.createEl('h3', { text: 'Goals' });
 
-        new Setting(containerEl)
+        const goalSetting = new Setting(containerEl)
             .setName('Daily reading goal (minutes)')
             .setDesc('Used for daily statistics and streaks')
             .addSlider((slider) =>
@@ -197,10 +206,11 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         this.plugin.refreshReaderModeIfActive();
                     })
             );
+        goalSetting.controlEl.classList.add('obsidianr-settings-control');
 
         containerEl.createEl('h3', { text: 'Reset' });
 
-        new Setting(containerEl)
+        const resetDefaultsSetting = new Setting(containerEl)
             .setName('Reset to Defaults')
             .setDesc('Reset all settings to their default values')
             .addButton((button) =>
@@ -215,5 +225,57 @@ export class ObsidianRSettingTab extends PluginSettingTab {
                         new Notice('All settings have been reset to defaults');
                     })
             );
+        resetDefaultsSetting.controlEl.classList.add('obsidianr-settings-control');
+
+        const resetDataSetting = new Setting(containerEl)
+            .setName('Reset Data')
+            .setDesc('Clear saved bookmarks, statistics, and reading positions')
+            .addButton((button) =>
+                button
+                    .setButtonText('Reset Data')
+                    .setWarning()
+                    .onClick(async () => {
+                        const modal = new ConfirmResetDataModal(this.app, async () => {
+                            await this.plugin.resetStoredData();
+                            this.display();
+                            new Notice('All reading data has been cleared');
+                        });
+                        modal.open();
+                    })
+            );
+        resetDataSetting.controlEl.classList.add('obsidianr-settings-control');
+    }
+}
+
+class ConfirmResetDataModal extends Modal {
+    constructor(app: App, private readonly onConfirm: () => Promise<void> | void) {
+        super(app);
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('p', { text: 'This will remove all saved bookmarks, statistics, and reading positions. Are you sure?' });
+
+        const buttons = contentEl.createDiv({ cls: 'modal-button-container' });
+
+        const cancelBtn = buttons.createEl('button', { text: 'Cancel' });
+        cancelBtn.addEventListener('click', () => {
+            this.close();
+        });
+
+        const confirmBtn = buttons.createEl('button', { text: 'Reset' });
+        confirmBtn.addClass('mod-warning');
+        confirmBtn.addEventListener('click', () => {
+            void this.handleConfirm();
+        });
+    }
+
+    private async handleConfirm(): Promise<void> {
+        try {
+            await this.onConfirm();
+        } finally {
+            this.close();
+        }
     }
 }
