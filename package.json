@@ -6,7 +6,8 @@
     "scripts": {
         "build": "node scripts/build.mjs",
         "dev": "node scripts/build.mjs --watch",
-        "apply": "npm run build && node scripts/apply.mjs"
+        "apply": "npm run build && node scripts/apply.mjs",
+        "test": "npm run apply && node scripts/reload-and-verify.mjs && node scripts/test-reader.mjs"
     },
     "keywords": [
         "obsidian",
