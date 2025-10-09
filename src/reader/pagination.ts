@@ -166,7 +166,8 @@ export class PaginationEngine {
             this.contentEl.style.width = `${constrainedWidth}px`;
             this.contentEl.style.maxWidth = `${constrainedWidth}px`;
             if (this.columnWidth > 0) {
-                this.contentEl.style.columnWidth = `${Math.round(this.columnWidth)}px`;
+                const preciseColumnWidth = Math.max(1, this.columnWidth);
+                this.contentEl.style.columnWidth = `${this.normalize(preciseColumnWidth, 1000)}px`;
             }
         } else {
             this.contentEl.style.removeProperty('height');
@@ -569,7 +570,8 @@ export class PaginationEngine {
     private buildHorizontalSnapshot(
         totalWidth: number,
         availableHeight: number,
-        metrics: { columnsPerPage: number; pageWidth: number; columnWidth: number; columnGap: number; }
+        metrics: { columnsPerPage: number; pageWidth: number; columnWidth: number; columnGap: number; },
+        measurementTarget: HTMLElement
     ): PaginationSnapshot {
         const columnHeight = Math.max(availableHeight, 1);
         const columnWidth = Math.max(1, this.normalize(metrics.columnWidth));
@@ -580,7 +582,7 @@ export class PaginationEngine {
         const columnsPerPage = Math.max(1, metrics.columnsPerPage);
         const totalPages = Math.max(1, Math.ceil(totalColumns / columnsPerPage));
 
-        const columnPositions: number[] = [];
+        let columnPositions: number[] = [];
         for (let columnIndex = 0; columnIndex < totalColumns; columnIndex += 1) {
             columnPositions.push(this.normalize(columnIndex * blockWidth));
         }
@@ -588,11 +590,20 @@ export class PaginationEngine {
             columnPositions.push(0);
         }
 
+        if (totalColumns > 1) {
+            const offsets = this.collectColumnOffsets(totalColumns, measurementTarget);
+            if (offsets.length === totalColumns) {
+                const baseOffset = offsets[0];
+                columnPositions = offsets.map((offset) => this.normalize(Math.max(0, offset - baseOffset)));
+            }
+        }
+
         const offsets: number[] = [];
         const maxStartIndex = Math.max(0, totalColumns - columnsPerPage);
         for (let pageIndex = 0; pageIndex < totalPages; pageIndex += 1) {
             const startIndex = Math.min(pageIndex * columnsPerPage, maxStartIndex);
-            offsets.push(columnPositions[startIndex] ?? 0);
+            const baseOffset = columnPositions[startIndex] ?? 0;
+            offsets.push(this.normalize(Math.max(0, baseOffset)));
         }
         if (offsets.length === 0) {
             offsets.push(0);
@@ -611,6 +622,41 @@ export class PaginationEngine {
             columnWidth,
             columnGap
         };
+    }
+
+    private collectColumnOffsets(totalColumns: number, measurementTarget: HTMLElement): number[] {
+        try {
+            const fragments = this.collectFragments();
+            if (fragments.length === 0) {
+                return [];
+            }
+            const contentRect = measurementTarget.getBoundingClientRect();
+            const precision = 1000;
+            const offsets: number[] = [];
+            const seen = new Set<number>();
+            for (const fragment of fragments) {
+                const relativeLeft = fragment.left - contentRect.left;
+                if (!Number.isFinite(relativeLeft)) {
+                    continue;
+                }
+                const normalized = Math.round(relativeLeft * precision) / precision;
+                if (normalized < -8 || normalized > contentRect.width + 8) {
+                    continue;
+                }
+                if (!seen.has(normalized)) {
+                    seen.add(normalized);
+                    offsets.push(normalized);
+                    if (offsets.length >= totalColumns) {
+                        break;
+                    }
+                }
+            }
+            offsets.sort((a, b) => a - b);
+            return offsets;
+        } catch (error) {
+            console.warn('[ObsidianR] pagination.collectColumnOffsets failed', error);
+            return [];
+        }
     }
 
     private getTransition(_type: ReaderParameters['transitionType']): string {
@@ -840,7 +886,7 @@ export class PaginationEngine {
             // Force layout so scrollWidth accounts for the new constraints.
             void measurementTarget.offsetWidth;
             const totalWidth = Math.max(viewportWidth, measurementTarget.scrollWidth);
-            return this.buildHorizontalSnapshot(totalWidth, contentHeight, metrics);
+            return this.buildHorizontalSnapshot(totalWidth, contentHeight, metrics, measurementTarget);
         }
 
         measurementTarget.style.removeProperty('height');
@@ -1153,7 +1199,7 @@ export class PaginationEngine {
         defaultPageWidth: number
     ): PaginationSnapshot {
         if (axis === 'x') {
-            return this.buildHorizontalSnapshot(extent, availableHeight, metrics);
+            return this.buildHorizontalSnapshot(extent, availableHeight, metrics, this.contentEl);
         }
 
         const normalizedScrollExtent = Math.max(extent, availableHeight);

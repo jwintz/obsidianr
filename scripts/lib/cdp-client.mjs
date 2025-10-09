@@ -5,11 +5,13 @@ const DEFAULT_PORT = 9222;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 class CDPConnection {
-    constructor(socket) {
+    constructor(socket, targetInfo) {
         this.socket = socket;
         this.messageId = 0;
         this.pending = new Map();
         this.closed = false;
+        this.targetInfo = targetInfo ?? null;
+        this.targetId = targetInfo?.id ?? targetInfo?.targetId ?? null;
 
         this.socket.addEventListener('message', (event) => {
             if (!event?.data) {
@@ -154,7 +156,7 @@ export async function connectToObsidianTarget(options = {}) {
         socket.addEventListener('error', (event) => reject(new Error(event?.message || 'Failed to open CDP socket')), { once: true });
     });
 
-    return new CDPConnection(socket);
+    return new CDPConnection(socket, target);
 }
 
 export async function withCDP(options, fn) {

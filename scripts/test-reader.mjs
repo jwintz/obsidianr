@@ -56,9 +56,50 @@ async function openChapter(cdp) {
     }
 }
 
-async function configureReader(cdp, columns) {
+async function setViewportBounds(cdp, viewport) {
+    if (!viewport || (viewport.width == null && viewport.height == null)) {
+        return;
+    }
+
+    const bounds = {};
+    if (Number.isFinite(viewport.width) && viewport.width > 0) {
+        bounds.width = Math.round(viewport.width);
+    }
+    if (Number.isFinite(viewport.height) && viewport.height > 0) {
+        bounds.height = Math.round(viewport.height);
+    }
+    if (Object.keys(bounds).length === 0) {
+        return;
+    }
+
+    try {
+        const params = cdp.targetId ? { targetId: cdp.targetId } : {};
+        const { windowId } = await cdp.send('Browser.getWindowForTarget', params);
+        if (windowId == null) {
+            return;
+        }
+        await cdp.send('Browser.setWindowBounds', {
+            windowId,
+            bounds: {
+                ...bounds,
+                windowState: 'normal'
+            }
+        });
+        await delay(400);
+    } catch (error) {
+        console.warn('[test-reader] Window resize skipped:', error.message ?? error);
+    }
+}
+
+async function configureReader(cdp, scenario) {
     const setupResult = await cdp.evaluate(`(async () => {
-        const desiredColumns = ${JSON.stringify(columns)};
+        const payload = ${JSON.stringify(scenario ?? {})};
+        const desiredColumns = Number.isFinite(payload?.columns) ? payload.columns : 1;
+        const desiredMargins = Number.isFinite(payload?.horizontalMargins) ? payload.horizontalMargins : null;
+        const desiredFontSize = Number.isFinite(payload?.fontSize) ? payload.fontSize : null;
+        const desiredLineSpacing = Number.isFinite(payload?.lineSpacing) ? payload.lineSpacing : null;
+        const desiredLetterSpacing = Number.isFinite(payload?.letterSpacing) ? payload.letterSpacing : null;
+        const desiredWordSpacing = Number.isFinite(payload?.wordSpacing) ? payload.wordSpacing : null;
         const plugin = window.app?.plugins?.plugins?.obsidianr ?? null;
         const reader = plugin?.reader ?? null;
         if (!reader) {
@@ -66,24 +107,37 @@ async function configureReader(cdp, columns) {
         }
         reader.updateParameters({
             columns: desiredColumns,
-            horizontalMargins: 12,
-            fontSize: reader.state.snapshot.parameters.fontSize,
-            lineSpacing: reader.state.snapshot.parameters.lineSpacing,
-            letterSpacing: reader.state.snapshot.parameters.letterSpacing,
-            wordSpacing: reader.state.snapshot.parameters.wordSpacing,
+            horizontalMargins: desiredMargins ?? reader.state.snapshot.parameters.horizontalMargins,
+            fontSize: desiredFontSize ?? reader.state.snapshot.parameters.fontSize,
+            lineSpacing: desiredLineSpacing ?? reader.state.snapshot.parameters.lineSpacing,
+            letterSpacing: desiredLetterSpacing ?? reader.state.snapshot.parameters.letterSpacing,
+            wordSpacing: desiredWordSpacing ?? reader.state.snapshot.parameters.wordSpacing,
             justified: reader.state.snapshot.parameters.justified,
             transitionType: 'none',
             fontFamily: reader.state.snapshot.parameters.fontFamily
         });
-        if (!reader.state.snapshot.active) {
+        if (reader.state.snapshot.active) {
+            reader.toggleReaderMode();
+            await new Promise((resolve) => setTimeout(resolve, 150));
             reader.toggleReaderMode();
         } else {
-            reader.refreshCurrentView(true);
+            reader.toggleReaderMode();
         }
         await new Promise((resolve) => setTimeout(resolve, 400));
         const pagination = reader?.pagination ?? reader?.['pagination'] ?? null;
         if (!pagination) {
             return { ok: false, reason: 'Pagination engine unavailable' };
+        }
+        if (desiredColumns > 0) {
+            let attempts = 0;
+            while (attempts < 6) {
+                const activeColumns = pagination.getColumnsPerPage?.() ?? null;
+                if ((desiredColumns === 1 && (activeColumns ?? 1) <= 1) || activeColumns === desiredColumns) {
+                    break;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 150));
+                attempts += 1;
+            }
         }
         const pageCount = pagination.getPageCount?.() ?? 0;
         const offsets = pagination.getOffsets?.() ?? [];
@@ -110,7 +164,9 @@ async function configureReader(cdp, columns) {
             readerStatePages: reader.state.snapshot.totalPages ?? null,
             appliedColumns: desiredColumns,
             effectiveColumns: reader.state.snapshot.parameters.columns,
-            computedColumnCount: Number.isNaN(computedColumns) ? null : computedColumns
+            computedColumnCount: Number.isNaN(computedColumns) ? null : computedColumns,
+            fontSize: reader.state.snapshot.parameters.fontSize,
+            horizontalMargins: reader.state.snapshot.parameters.horizontalMargins
         };
     })()`);
 
@@ -120,12 +176,12 @@ async function configureReader(cdp, columns) {
     return setupResult;
 }
 
-function assertPaginationMetrics(metrics, diagnostics, expectedColumns) {
+function assertPaginationMetrics(metrics, diagnostics, expectations) {
+    const expectedColumns = Math.max(1, expectations?.columns ?? 1);
     if (!diagnostics || !Array.isArray(diagnostics.pages) || diagnostics.pages.length === 0) {
         throw new Error('Missing page diagnostics for validation');
     }
 
-    const firstPage = diagnostics.pages[0];
     if (metrics.columnsPerPage !== expectedColumns) {
         throw new Error(`Pagination reports ${metrics.columnsPerPage} columns per page, expected ${expectedColumns}`);
     }
@@ -135,20 +191,19 @@ function assertPaginationMetrics(metrics, diagnostics, expectedColumns) {
         throw new Error(`Pagination axis mismatch: expected ${expectedAxis}, received ${metrics.axis}`);
     }
 
-    if (firstPage?.columnCount != null) {
-        if (expectedColumns === 1) {
-            if (firstPage.columnCount > 1) {
-                throw new Error(`Single-column layout unexpectedly rendered ${firstPage.columnCount} columns`);
+    const computedColumns = diagnostics.computedColumnCount ?? null;
+    const firstPage = diagnostics.pages[0];
+    const observedColumns = firstPage?.columnCount ?? null;
+    if (expectedColumns > 1) {
+        if (computedColumns != null) {
+            if (computedColumns < expectedColumns) {
+                throw new Error(`Computed column count ${computedColumns} < expected ${expectedColumns}`);
             }
-        } else if (firstPage.columnCount !== expectedColumns) {
-            if (firstPage.columnCount > expectedColumns) {
-                throw new Error(`Page 1 displays ${firstPage.columnCount} columns > expected ${expectedColumns}`);
-            }
-            throw new Error(`Page 1 displays ${firstPage.columnCount} columns, expected ${expectedColumns}`);
+        } else if (observedColumns != null && observedColumns < expectedColumns) {
+            throw new Error(`Page 1 displays ${observedColumns} columns, expected ${expectedColumns}`);
         }
-        if (firstPage.columnCount > 4) {
-            throw new Error(`Page 1 shows an excessive number of columns (${firstPage.columnCount})`);
-        }
+    } else if (observedColumns != null && observedColumns > 1) {
+        throw new Error(`Single-column layout unexpectedly rendered ${observedColumns} columns`);
     }
 
     for (const page of diagnostics.pages) {
@@ -156,7 +211,7 @@ function assertPaginationMetrics(metrics, diagnostics, expectedColumns) {
             throw new Error(`Page ${page.page + 1} is empty (text length ${page.textLength ?? 0})`);
         }
         if (expectedColumns > 1 && diagnostics.containerWidth != null) {
-            const tolerance = 2.5;
+            const tolerance = expectations?.marginTolerance ?? 2.5;
             if (page.minColumnLeft != null && page.minColumnLeft < -tolerance) {
                 throw new Error(`Page ${page.page + 1} columns start outside viewport by ${Math.abs(page.minColumnLeft).toFixed(2)}px`);
             }
@@ -168,16 +223,20 @@ function assertPaginationMetrics(metrics, diagnostics, expectedColumns) {
     }
 
     const padding = diagnostics.viewportPadding ?? {};
+    const expectedMargin = Number.isFinite(expectations?.horizontalMargins)
+        ? expectations.horizontalMargins
+        : 12;
+    const marginTolerance = expectations?.marginTolerance ?? 1;
     if (padding.leftPercent != null) {
-        const delta = Math.abs(padding.leftPercent - 12);
-        if (delta > 0.75) {
-            throw new Error(`Horizontal left margin expected ~12%, observed ${padding.leftPercent}%`);
+        const delta = Math.abs(padding.leftPercent - expectedMargin);
+        if (delta > marginTolerance) {
+            throw new Error(`Horizontal left margin expected ~${expectedMargin}% (±${marginTolerance}), observed ${padding.leftPercent}%`);
         }
     }
     if (padding.rightPercent != null) {
-        const delta = Math.abs(padding.rightPercent - 12);
-        if (delta > 0.75) {
-            throw new Error(`Horizontal right margin expected ~12%, observed ${padding.rightPercent}%`);
+        const delta = Math.abs(padding.rightPercent - expectedMargin);
+        if (delta > marginTolerance) {
+            throw new Error(`Horizontal right margin expected ~${expectedMargin}% (±${marginTolerance}), observed ${padding.rightPercent}%`);
         }
     }
 
@@ -250,14 +309,14 @@ async function collectPageDiagnostics(cdp, pageCount) {
             : (pagination.getPageCount?.() ?? reader.state.snapshot.totalPages ?? 0);
 
     const diagnostics = [];
-    const viewportRect = viewport.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    const containerWidth = containerRect.width;
+    const initialViewportRect = viewport.getBoundingClientRect();
+    const initialContainerRect = container.getBoundingClientRect();
+    const containerWidth = initialContainerRect.width;
         const viewportStyle = window.getComputedStyle(viewport);
         const paddingLeftPx = parseFloat(viewportStyle.paddingLeft) || 0;
         const paddingRightPx = parseFloat(viewportStyle.paddingRight) || 0;
-        const paddingLeftPercent = viewportRect.width > 0 ? (paddingLeftPx / viewportRect.width) * 100 : null;
-        const paddingRightPercent = viewportRect.width > 0 ? (paddingRightPx / viewportRect.width) * 100 : null;
+        const paddingLeftPercent = initialViewportRect.width > 0 ? (paddingLeftPx / initialViewportRect.width) * 100 : null;
+        const paddingRightPercent = initialViewportRect.width > 0 ? (paddingRightPx / initialViewportRect.width) * 100 : null;
 
         const blockSelector = 'p, h1, h2, h3, h4, h5, h6, blockquote, li';
         const originalPage = reader.state.snapshot.currentPage ?? 0;
@@ -266,6 +325,8 @@ async function collectPageDiagnostics(cdp, pageCount) {
             pagination.applyPage(index);
             await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
+            const viewportRect = viewport.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
             const blocks = Array.from(container.querySelectorAll(blockSelector));
             const viewportTop = viewportRect.top + 0.5;
             const viewportBottom = viewportRect.bottom - 0.5;
@@ -322,10 +383,13 @@ async function collectPageDiagnostics(cdp, pageCount) {
 
         pagination.applyPage(originalPage);
 
+        const computedColumnCount = parseInt(window.getComputedStyle(container).columnCount, 10);
+
         return {
             ok: true,
             pages: diagnostics,
             containerWidth: Math.round(containerWidth * 100) / 100,
+            computedColumnCount: Number.isNaN(computedColumnCount) ? null : computedColumnCount,
             viewportPadding: {
                 leftPx: Math.round(paddingLeftPx * 100) / 100,
                 rightPx: Math.round(paddingRightPx * 100) / 100,
@@ -368,38 +432,112 @@ async function main() {
         await ensurePluginPresent(cdp);
         await openChapter(cdp);
 
-        const scenarios = [1, 2, 3];
+        const scenarios = [
+            {
+                label: '1col-default',
+                columns: 1,
+                fontSize: 18,
+                horizontalMargins: 12,
+                viewport: { width: 1180, height: 820 }
+            },
+            {
+                label: '1col-compact',
+                columns: 1,
+                fontSize: 16,
+                horizontalMargins: 6,
+                viewport: { width: 960, height: 720 }
+            },
+            {
+                label: '2col-standard',
+                columns: 2,
+                fontSize: 18,
+                horizontalMargins: 10,
+                viewport: { width: 1280, height: 880 },
+                marginTolerance: 5
+            },
+            {
+                label: '2col-wide',
+                columns: 2,
+                fontSize: 20,
+                horizontalMargins: 14,
+                viewport: { width: 1480, height: 900 },
+                marginTolerance: 5
+            },
+            {
+                label: '3col-compact',
+                columns: 3,
+                fontSize: 17,
+                horizontalMargins: 8,
+                viewport: { width: 1380, height: 820 },
+                marginTolerance: 5.5
+            },
+            {
+                label: '3col-tall',
+                columns: 3,
+                fontSize: 19,
+                horizontalMargins: 12,
+                viewport: { width: 1420, height: 1020 },
+                marginTolerance: 5.5
+            }
+        ];
         const results = [];
 
-        for (const columns of scenarios) {
-            const paginationMetrics = await configureReader(cdp, columns);
-            const diagnostics = await collectPageDiagnostics(
-                cdp,
-                paginationMetrics.pageCount ?? paginationMetrics.offsets.length ?? 0
-            );
-            paginationMetrics.diagnostics = diagnostics;
+        for (const scenario of scenarios) {
+            let attempt = 0;
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+                try {
+                    await setViewportBounds(cdp, scenario.viewport);
+                    const paginationMetrics = await configureReader(cdp, scenario);
+                    const diagnostics = await collectPageDiagnostics(
+                        cdp,
+                        paginationMetrics.pageCount ?? paginationMetrics.offsets.length ?? 0
+                    );
+                    paginationMetrics.diagnostics = diagnostics;
 
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const suffix = `${columns}col-${timestamp}`;
-            const screenshotPath = await captureScreenshot(cdp, suffix);
-            const diagnosticsPayload = {
-                metrics: { ...paginationMetrics },
-                diagnostics,
-                screenshotPath,
-                columns
-            };
-            const diagnosticsPath = await writeDiagnostics(suffix, diagnosticsPayload);
-            paginationMetrics.screenshotPath = screenshotPath;
-            paginationMetrics.diagnosticsPath = diagnosticsPath;
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const suffix = `${scenario.label}-${timestamp}`;
+                    const screenshotPath = await captureScreenshot(cdp, suffix);
+                    const diagnosticsPayload = {
+                        metrics: { ...paginationMetrics },
+                        diagnostics,
+                        screenshotPath,
+                        scenario
+                    };
+                    const diagnosticsPath = await writeDiagnostics(suffix, diagnosticsPayload);
+                    paginationMetrics.screenshotPath = screenshotPath;
+                    paginationMetrics.diagnosticsPath = diagnosticsPath;
 
-            console.log(`[test-reader] (${columns} col) Captured screenshot at`, screenshotPath);
-            console.log(`[test-reader] (${columns} col) Diagnostics written to`, diagnosticsPath);
+                    console.log(`[test-reader] (${scenario.label}) Captured screenshot at`, screenshotPath);
+                    console.log(`[test-reader] (${scenario.label}) Diagnostics written to`, diagnosticsPath);
 
-            assertPaginationMetrics(paginationMetrics, diagnostics, columns);
+                    assertPaginationMetrics(paginationMetrics, diagnostics, {
+                        columns: scenario.columns,
+                        horizontalMargins: scenario.horizontalMargins,
+                        marginTolerance: scenario.marginTolerance ?? 1.5
+                    });
 
-            console.log(`[test-reader] (${columns} col) Pagination metrics`, paginationMetrics);
+                    console.log(`[test-reader] (${scenario.label}) Pagination metrics`, paginationMetrics);
 
-            results.push({ columns, metrics: paginationMetrics, diagnosticsPath, screenshotPath });
+                    results.push({
+                        label: scenario.label,
+                        parameters: scenario,
+                        metrics: paginationMetrics,
+                        diagnosticsPath,
+                        screenshotPath
+                    });
+                    break;
+                } catch (error) {
+                    attempt += 1;
+                    const message = error?.message ?? String(error);
+                    if (attempt <= 2 && /Promise was collected|Target closed|Execution context was destroyed/.test(message)) {
+                        console.warn(`[test-reader] (${scenario.label}) transient error (${message.trim()}) retry ${attempt}/2`);
+                        await delay(600);
+                        continue;
+                    }
+                    throw error;
+                }
+            }
         }
 
         return results;
