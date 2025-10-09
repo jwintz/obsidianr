@@ -35,6 +35,10 @@ body.obsidianr-reader .obsidianr-reader-container {
 
 body.obsidianr-reader .obsidianr-reader-content {
 	width: 100%;
+	max-width: 100%;
+	box-sizing: border-box;
+	word-break: break-word;
+	overflow-wrap: anywhere;
 }
 
 body.obsidianr-reader .obsidianr-reader-page-indicator {

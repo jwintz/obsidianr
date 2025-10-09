@@ -50,52 +50,17 @@ plugin.reader.updateParameters({
 
 ## Breakthrough Discoveries
 
-### 1. Container vs Content Element (October 7, 2025)
+### 1. Available Height Calculation
 
-**Problem:** Content was invisible on pages > 0 because transform was applied to the wrong element.
-
-**Discovery:**
-- `PaginationEngine` constructor set both `containerEl` and `contentEl` to the same element
-- Transform moved the ENTIRE container off-screen (e.g., position -771 on page 1)
-- Content was displaced way above viewport
-
-**Solution:**
-```typescript
-// WRONG (old code):
-this.containerEl = contentEl;
-this.contentEl = contentEl;  // Same element!
-
-// CORRECT (fixed):
-this.containerEl = containerEl;  // Container = .obsidianr-reader-container
-this.contentEl = getContentElement();  // Content = .obsidianr-reader-content (inside container)
-```
-
-**Implementation:**
-- Created `getContentElement()` to find `.obsidianr-reader-content` inside container
-- Created `setTransform()` to apply transform to content element only
-- Container stays fixed at rendering area (77-926), content moves inside it
-
-**Result:** All pages now show content correctly ✅
-
-### 2. Available Height Calculation (October 7, 2025)
-
-**Problem:** Page height was 779px instead of 849px, causing wrong page count.
+**Problem:** Page height was not correct, causing wrong page count.
 
 **Discovery:**
-- Old calculation: `viewportHeight - padding - indicator = 779px` (WRONG)
-- Actual rendering area: `header.bottom → indicator.top = 849px` (CORRECT)
+- Old calculation: `viewportHeight - padding - indicator` (WRONG)
+- Actual rendering area: `header.bottom → indicator.top` (CORRECT)
 
-**Solution:**
-```typescript
-// Calculate rendering area directly
-const header = document.querySelector('.view-header-title-container');
-const indicator = document.querySelector('.obsidianr-reader-page-indicator');
-const availableHeight = indicator.top - header.bottom;  // 849px
-```
+**Result:** Correct page height and page count
 
-**Result:** Correct page height and page count ✅
-
-### 3. Viewport Padding Removal (October 7, 2025)
+### 2. Viewport Padding Removal
 
 **Problem:** Content had 16px offset even with container positioned correctly.
 
@@ -103,74 +68,33 @@ const availableHeight = indicator.top - header.bottom;  // 849px
 - Old approach used viewport padding to create space for header/indicator
 - With absolute container positioning, viewport padding is unnecessary and causes offset
 
-**Solution:**
-```typescript
-// Remove viewport padding when using absolute container positioning
-this.viewportEl.style.setProperty('padding-top', '0px', 'important');
-this.viewportEl.style.setProperty('padding-bottom', '0px', 'important');
-```
-
-**Result:** No more 16px offset ✅
-
-### 4. Multi-Column Layout Challenge (Current)
+### 3. Multi-Column Layout Challenge (Current)
 
 **Problem:** Columns flow ACROSS pages instead of WITHIN pages.
 
 **Current Behavior:**
 - `column-fill: balance` creates balanced columns VERTICALLY
-- Content split into shorter columns: 2 cols → 9,496px, 3 cols → 9,130px
 - Must read column 1 across all pages, then go back for column 2 (WRONG for ebook!)
 
 **Expected Ebook Behavior:**
-- Each page shows N columns side-by-side
+- Each page shows N columns side-by-side (depending on the settings)
 - Read all columns on page 1 (left to right), then page 2
 - Example with 2 columns:
   - Page 1: [Column 1 | Column 2]
   - Page 2: [Column 3 | Column 4]
 
 **Proposed Solution:**
-1. Set **fixed height** on content element = `availableHeight` (849px)
+1. Set **fixed height** on content element = `availableHeight`
 2. Use **`column-fill: auto`** for sequential filling (not balanced)
 3. CSS creates columns that fill to height, flowing left-to-right
-4. Paginate **horizontally**: calculate page width, transform via `translateX(-offset)`
-5. Each "page" shows exactly N columns side-by-side
-
-**Implementation Plan:**
-```typescript
-// In applyParameters():
-if (context.columns > 1) {
-    target.style.height = `${availableHeight}px`;  // Fixed height
-    target.style.columnFill = 'auto';  // Sequential, not balanced
-}
-
-// In measure():
-if (columns > 1 && hasFixedHeight) {
-    // Horizontal pagination for ebook columns
-    const scrollWidth = measurementTarget.scrollWidth;
-    const viewportWidth = this.viewportEl.clientWidth;
-    const totalPages = Math.ceil(scrollWidth / viewportWidth);
-    // Transform: translateX(-pageWidth * pageIndex)
-} else {
-    // Vertical pagination (current)
-    const totalPages = Math.ceil(scrollHeight / availableHeight);
-    // Transform: translateY(-availableHeight * pageIndex)
-}
-```
+4. Each "page" shows exactly N columns side-by-side
 
 ## Technical Architecture
 
 ### Rendering Area
 - **Top boundary**: Bottom of `.view-header-title-container`
 - **Bottom boundary**: Top of `.obsidianr-reader-page-indicator`
-- **Height**: `indicator.top - header.bottom` (e.g., 849px)
-
-### Element Hierarchy
-```
-.markdown-reading-view (viewport)
-  └─ .obsidianr-reader-container (fixed at header → indicator)
-      └─ .obsidianr-reader-content (transform moves this)
-          └─ [Rendered markdown content]
-```
+- **Height**: `indicator.top - header.bottom`
 
 ### Key Principles
 - Container positioned absolutely at rendering area, NEVER moves
@@ -178,20 +102,34 @@ if (columns > 1 && hasFixedHeight) {
 - Viewport has `overflow: hidden` to clip content outside rendering area
 - Result: **No cropping within viewport** - all visible content is fully readable
 
-### Pagination System
+## Implementation plan
 
-**Current (Single-Column & Multi-Column WRONG):**
-```typescript
-const availableHeight = indicator.top - header.bottom;  // 849px
-const scrollHeight = content.scrollHeight;               // 11,207px
-const totalPages = Math.ceil(scrollHeight / availableHeight);
-const offsets = [0, 849, 1698, ...];  // Vertical offsets
-// Transform: translate3d(0, -offset[N], 0)
-```
+- The settings are dynamic parameters of both the pagination and rendering engine
+- The pagination engine computes, for a note, which is a chapter within a book, the set of pages that fit the rendering area (which is variable depending on the application width, height and setup (sidebars visible or not)), so that setting are honored and content is neither visually cropped, nor parts of it repeated or dropped when navigating through pages
+- The rendering engine makes sure computed pages are correctly displayed depending on the set of settings (that must dynamically apply)
+- Fix the rendering engine for N pages (N is in [1, 2, 3])
+- Fix the pagination algorithm
 
-**Status:**
-- ✅ Single-column: Works perfectly
-- ❌ Multi-column: Flows across pages (needs horizontal pagination)
+## Progress log
+
+- [x] **Audit current pagination & rendering**
+  - `PaginationEngine` currently derives page offsets from text line fragments while the viewport padding injects header/indicator spacing, so the measured `availableHeight` still depends on external padding rather than the direct header→indicator slice.
+  - Multi-column support relies on CSS `column-fill: balance` and maps fragments vertically, which causes columns to span across pages instead of yielding N side-by-side columns per page.
+  - Rendering manager (`ReaderManager`) mirrors the same padding/column-fill assumptions, so content sizing and transforms move the entire column flow vertically instead of paging through contiguous column groups.
+- [x] **Refactor pagination engine for multi-column flow**
+  - Pagination now records axis-aware metadata (page width, horizontal offsets, column metrics) so downstream rendering can translate along X when multiple columns are active.
+  - Measurement uses sequential column flow (`column-fill: auto`), computes deterministic virtual offsets per column group, and exposes total column counts for progress/bookmark consumers.
+  - Fallback pagination mirrors the axis-aware logic to keep page counts consistent during error paths, and debugging validation respects the wider window span per multi-column page.
+- [x] **Automate CDP regression checks**
+  - Added `scripts/reload-and-verify.mjs` to toggle the plugin via CDP and ensure the reader manager is rehydrated after each build.
+  - Added `scripts/test-reader.mjs` to open a reference chapter, enforce a 2-column layout, assert pagination metadata (axis, offsets, column metrics), and capture timestamped screenshots in `artifacts/screenshots` for visual diffing.
+  - Shared CDP helper (`scripts/lib/cdp-client.mjs`) handles target discovery and command dispatch without external dependencies so every step can run under `npm test`.
+  - Current run intentionally fails: 2-column layout computes 3 pages and leaves pages 2–3 empty, confirming the pagination/rendering bug before refactoring.
+  - Regression now records DOM diagnostics alongside screenshots (`artifacts/dom/*.json`) and exposes the visual bug clearly: the first page renders 57 columns instead of 2, so screenshots + JSON capture the mismatch in addition to the empty page metrics.
+
+## Validation
+
+Since there is an MCP and CDP toolchain, scripts unders the `scripts` folder must validate each step, everytime the plugin is built using `npm run apply`. They must include visual analysis by grabbing screenshots of the rendering throughout pages. For the pagination, the computation must be deterministic and exact. Given the state of the application and the set of settings, there is ONE mathematically correct way to compute the set of pages to satisfy the constraints listed in the immplementation plan.
 
 ## Constraints
 

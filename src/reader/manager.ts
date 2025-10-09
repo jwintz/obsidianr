@@ -182,8 +182,11 @@ export class ReaderManager {
     }
 
     updateParameters(partial: Partial<ReaderParameters>): void {
+        const before = this.state.snapshot.parameters;
         this.state.updateParameters(partial);
-        this.refreshCurrentView();
+        const after = this.state.snapshot.parameters;
+        const preserve = before.columns === after.columns && before.horizontalMargins === after.horizontalMargins;
+        this.refreshCurrentView(preserve);
     }
 
     onActiveLeafChange(leaf: WorkspaceLeaf | null): void {
@@ -319,13 +322,15 @@ export class ReaderManager {
         target.style.paddingTop = `${guardPadding}px`;
         target.style.paddingBottom = `${guardPadding}px`;
 
+        target.style.removeProperty('width');
+        target.style.removeProperty('max-width');
         const columnCount = Math.max(1, Math.round(parameters.columns));
         target.style.breakInside = 'avoid';
         if (columnCount > 1) {
             const columnGap = Math.max(16, Math.round(parameters.fontSize * 0.6));
             target.style.columnCount = `${columnCount}`;
             target.style.columnGap = `${columnGap}px`;
-            target.style.columnFill = 'balance';
+            target.style.columnFill = 'auto';
         } else {
             target.style.removeProperty('column-count');
             target.style.removeProperty('column-gap');
@@ -881,6 +886,7 @@ export class ReaderManager {
             container.style.width = '100%';
             container.style.height = '100%';
             container.style.overflow = 'hidden';
+            container.style.padding = '0';
             viewport.appendChild(container);
 
             this.contentEl = container;
@@ -1336,6 +1342,7 @@ export class ReaderManager {
         container.style.width = '100%';
         container.style.height = '100%';
         container.style.overflow = 'hidden';
+        container.style.padding = '0';
         tempViewport.appendChild(container);
 
         const fragment = doc.createElement('div');
